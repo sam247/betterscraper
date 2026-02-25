@@ -39,7 +39,7 @@ export default function Home() {
       return;
     }
     if (!state.trim()) {
-      setError("State is required.");
+      setError("State / region is required.");
       setRunning(false);
       return;
     }
@@ -114,12 +114,10 @@ export default function Home() {
   ] as const;
 
   return (
-    <main className="container grid">
-      <section className="form-section">
-        <h2>Better Scraper</h2>
-        {error && (
-          <p style={{ color: "#c00", marginBottom: "1rem" }}>{error}</p>
-        )}
+    <main className="main-wrap">
+      <div className="col-form">
+        <h1>Better Scraper</h1>
+        {error && <p className="err-msg">{error}</p>}
         <div className="form-row">
           <label htmlFor="country">Country</label>
           <input
@@ -127,16 +125,17 @@ export default function Home() {
             type="text"
             value={country}
             onChange={(e) => setCountry(e.target.value)}
+            placeholder="e.g. United States, United Kingdom"
           />
         </div>
         <div className="form-row">
-          <label htmlFor="state">State (required)</label>
+          <label htmlFor="state">State / region (required)</label>
           <input
             id="state"
             type="text"
             value={state}
             onChange={(e) => setState(e.target.value)}
-            placeholder="e.g. Texas"
+            placeholder="e.g. Texas, England"
           />
         </div>
         <div className="form-row">
@@ -173,44 +172,46 @@ export default function Home() {
             {running ? "Running…" : "Run Extraction"}
           </button>
         </div>
-      </section>
+      </div>
 
-      <section className="form-section">
-        <h2>Extraction log</h2>
-        <div className="log-section">
-          <pre>
-            {log.length === 0 && !running
-              ? "Run an extraction to see log output."
-              : log.join("\n")}
-            {running && log.length === 0 ? "\nRunning…" : ""}
-          </pre>
+      <div className="col-right">
+        <div className="log-wrap">
+          <h2>Extraction log</h2>
+          <div className="log-inner">
+            <pre>
+              {log.length === 0 && !running
+                ? "Run an extraction to see log output."
+                : log.join("\n")}
+              {running && log.length === 0 ? "\nRunning…" : ""}
+            </pre>
+          </div>
         </div>
-      </section>
-
-      <section className="form-section">
-        <div className="stats">
-          <span>Total results found: {totalResults}</span>
+        <div className="stats-wrap">
+          <span>Total: {totalResults}</span>
           <span>Deduplicated: {dedupedCount}</span>
-          {results.length > 0 && (
-            <button onClick={exportCsv}>Export CSV</button>
-          )}
+          <button onClick={exportCsv} disabled={results.length === 0}>
+            Export CSV
+          </button>
         </div>
-      </section>
-
-      {results.length > 0 && (
-        <section className="form-section">
+        <div className="table-wrap">
           <h2>Table preview (first 20 rows)</h2>
-          <div className="table-wrap">
-            <table>
-              <thead>
+          <table className="table-inner">
+            <thead>
+              <tr>
+                {columns.map((col) => (
+                  <th key={col}>{col}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {previewRows.length === 0 ? (
                 <tr>
-                  {columns.map((col) => (
-                    <th key={col}>{col}</th>
-                  ))}
+                  <td colSpan={columns.length} style={{ color: "#666" }}>
+                    No results yet. Run an extraction.
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {previewRows.map((row, i) => (
+              ) : (
+                previewRows.map((row, i) => (
                   <tr key={row.place_id + i}>
                     {columns.map((col) => (
                       <td key={col}>
@@ -220,12 +221,12 @@ export default function Home() {
                       </td>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </main>
   );
 }

@@ -63,9 +63,10 @@ export async function GET() {
     );
   }
 
+  const countryPart = sanitiseFilenamePart(last.country || "us");
   const statePart = sanitiseFilenamePart(last.state);
   const cityPart = last.city ? `-${sanitiseFilenamePart(last.city)}` : "";
-  const filename = `us-${statePart}${cityPart}-lice-clinics.csv`;
+  const filename = `${countryPart}-${statePart}${cityPart}-lice-clinics.csv`;
 
   return new NextResponse(rows.join("\n"), {
     status: 200,

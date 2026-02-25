@@ -81,8 +81,8 @@ function getComponent(
   return c?.longText ?? "";
 }
 
-function buildQuery(term: string, state: string, city?: string): string {
-  const location = city ? `${city}, ${state}` : state;
+function buildQuery(term: string, state: string, country: string, city?: string): string {
+  const location = city ? `${city}, ${state}, ${country}` : `${state}, ${country}`;
   return `${term} in ${location}`;
 }
 
@@ -170,8 +170,9 @@ export async function runExtraction(
   const maxResults = Math.min(Math.max(1, input.maxResults || 60), 60);
   let totalRawFromSearch = 0;
 
+  const country = input.country?.trim() || "United States";
   for (const term of input.searchTerms) {
-    const query = buildQuery(term.trim(), input.state.trim(), input.city?.trim());
+    const query = buildQuery(term.trim(), input.state.trim(), country, input.city?.trim());
     if (!query.replace(term, "").trim()) continue;
 
     log.push(`[${term}] Query: ${query}`);

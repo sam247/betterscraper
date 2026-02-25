@@ -61,6 +61,6 @@ export async function POST(req: Request) {
   };
 
   const result = await runExtraction(input, apiKey);
-  setLastExtraction(result.results, input.state, input.city || "");
+  setLastExtraction(result.results, input.country, input.state, input.city || "");
   return NextResponse.json(result);
 }
