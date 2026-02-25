@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { runExtraction } from "@/lib/places";
 import { setLastExtraction } from "@/lib/store";
 
+export const maxDuration = 60;
+
 export async function POST(req: Request) {
   let body: {
     country?: string;
