@@ -114,7 +114,7 @@ export default function Home() {
   ] as const;
 
   return (
-    <main className="main-wrap">
+    <main className="main-wrap" aria-busy={running}>
       <div className="col-form">
         <h1>Better Scraper</h1>
         {error && <p className="err-msg">{error}</p>}
@@ -206,7 +206,7 @@ export default function Home() {
             <tbody>
               {previewRows.length === 0 ? (
                 <tr>
-                  <td colSpan={columns.length} style={{ color: "#666" }}>
+                  <td colSpan={columns.length} className="table-empty">
                     No results yet. Run an extraction.
                   </td>
                 </tr>
