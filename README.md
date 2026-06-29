@@ -18,6 +18,7 @@ Internal tool to extract business leads from Google Places by region, with optio
    ```
 
    - `GOOGLE_PLACES_API_KEY` — from [Google Cloud Console](https://console.cloud.google.com/) (Places API (New) enabled).
+   - `TOMBA_API_KEY` and `TOMBA_API_SECRET` — from [Tomba](https://app.tomba.io/api) for domain email lookup (optional, recommended).
    - `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD`, or `BASIC_AUTH_CREDENTIALS=user:password`.
 
 3. Run locally:
@@ -41,9 +42,16 @@ Internal tool to extract business leads from Google Places by region, with optio
 - Enable **Scrape emails from websites** to fetch contact emails from each business website (homepage + common contact pages).
 - Click **Run extraction**, then **Export CSV** for the full dataset including emails.
 
-## Email scraping
+## Email lookup
 
-Emails are extracted by fetching each business website and parsing HTML for `mailto:` links and email patterns. Common contact paths (`/contact`, `/about`, etc.) are checked. Junk addresses (noreply, example.com, etc.) are filtered out.
+Emails are resolved per business website:
+
+1. **Tomba domain search** (if `TOMBA_API_KEY` + `TOMBA_API_SECRET` are set) — ~1 Finder credit per domain
+2. **Website scrape fallback** — parses HTML, Cloudflare-protected emails, JSON-LD
+
+Enable **Only keep leads with email** to drop rows with no email after lookup.
+
+Google Places cannot filter by email upfront — Tomba runs after Places returns businesses with websites.
 
 ## Stack
 

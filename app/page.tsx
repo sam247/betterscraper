@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { ExtractionLog } from "@/components/ExtractionLog";
 import { ResultsTable } from "@/components/ResultsTable";
@@ -26,6 +26,7 @@ const initialConfig: RunConfigValues = {
   searchTerms: defaultCategory.label,
   maxResults: 60,
   scrapeEmails: true,
+  emailSource: "scrape",
   onlyWithEmail: false,
   splitByArea: true,
   categoryId: DEFAULT_CATEGORY_ID,
@@ -69,6 +70,23 @@ export default function Home() {
   const [dedupedCount, setDedupedCount] = useState(0);
   const [emailsFound, setEmailsFound] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [tombaConfigured, setTombaConfigured] = useState(false);
+  const [statusRefreshKey, setStatusRefreshKey] = useState(0);
+
+  useEffect(() => {
+    fetch("/api/status")
+      .then((r) => r.json())
+      .then((data) => {
+        const hasTomba = !!data.tomba;
+        setTombaConfigured(hasTomba);
+        if (!hasTomba) {
+          setConfig((prev) =>
+            prev.emailSource === "tomba" ? { ...prev, emailSource: "scrape" } : prev
+          );
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const locationLabel = useMemo(() => {
     const parts = [config.city, config.state, config.country].filter(Boolean);
@@ -192,7 +210,16 @@ export default function Home() {
         return;
       }
 
-      setLog((prev) => [...prev, "Scraping emails from websites…"]);
+      const useTomba = config.emailSource === "tomba" && tombaConfigured;
+      if (config.emailSource === "tomba" && !tombaConfigured) {
+        setError("Tomba is selected but API keys are not configured.");
+        return;
+      }
+
+      setLog((prev) => [
+        ...prev,
+        useTomba ? "Looking up emails via Tomba…" : "Scraping emails from websites…",
+      ]);
 
       const byId = new Map(places.map((p) => [p.place_id, { ...p }]));
       const emailLog: string[] = [];
@@ -208,7 +235,11 @@ export default function Home() {
         const emailRes = await fetch("/api/emails", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ results: batch }),
+          body: JSON.stringify({
+            results: batch,
+            useTomba,
+            useScrape: config.emailSource === "scrape",
+          }),
         });
 
         const emailData = await readApiJson<EmailsResponse>(emailRes);
@@ -254,8 +285,9 @@ export default function Home() {
       );
     } finally {
       setRunning(false);
+      setStatusRefreshKey((k) => k + 1);
     }
-  }, [config, runPlacesBuild]);
+  }, [config, runPlacesBuild, tombaConfigured]);
 
   const exportCsv = useCallback(() => {
     downloadCsv(
@@ -268,12 +300,13 @@ export default function Home() {
 
   return (
     <div className="flex h-full min-h-dvh flex-col bg-bg text-fg" aria-busy={running}>
-      <AppHeader />
+      <AppHeader refreshKey={statusRefreshKey} />
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <RunConfig
           values={config}
           running={running}
           error={error}
+          tombaConfigured={tombaConfigured}
           onChange={handleConfigChange}
           onRun={runExtraction}
         />

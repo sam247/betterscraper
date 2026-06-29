@@ -13,6 +13,8 @@ import {
   PLACE_CATEGORY_GROUPS,
 } from "@/lib/place-categories";
 
+export type EmailSource = "tomba" | "scrape";
+
 export interface RunConfigValues {
   country: string;
   state: string;
@@ -20,6 +22,7 @@ export interface RunConfigValues {
   searchTerms: string;
   maxResults: number;
   scrapeEmails: boolean;
+  emailSource: EmailSource;
   onlyWithEmail: boolean;
   splitByArea: boolean;
   categoryId: string;
@@ -29,6 +32,7 @@ interface RunConfigProps {
   values: RunConfigValues;
   running: boolean;
   error: string | null;
+  tombaConfigured: boolean;
   onChange: (patch: Partial<RunConfigValues>) => void;
   onRun: () => void;
 }
@@ -42,6 +46,7 @@ export function RunConfig({
   values,
   running,
   error,
+  tombaConfigured,
   onChange,
   onRun,
 }: RunConfigProps) {
@@ -213,8 +218,55 @@ export function RunConfig({
             onChange={(e) => onChange({ scrapeEmails: e.target.checked })}
             className="h-4 w-4 rounded border-border accent-accent"
           />
-          <span>Scrape emails from websites</span>
+          <span>Find emails</span>
         </label>
+
+        {values.scrapeEmails && (
+          <div>
+            <span className={labelClass}>Email source</span>
+            <div
+              className="flex rounded-md border border-border p-0.5"
+              role="group"
+              aria-label="Email source"
+            >
+              <button
+                type="button"
+                disabled={!tombaConfigured}
+                onClick={() => onChange({ emailSource: "tomba" })}
+                className={`flex-1 rounded px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  values.emailSource === "tomba"
+                    ? "bg-elevated text-fg"
+                    : "text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+                }`}
+              >
+                Tomba
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange({ emailSource: "scrape" })}
+                className={`flex-1 rounded px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  values.emailSource === "scrape"
+                    ? "bg-elevated text-fg"
+                    : "text-muted hover:text-fg"
+                }`}
+              >
+                Website scrape
+              </button>
+            </div>
+            <p className="mt-1.5 text-[11px] text-muted">
+              {values.emailSource === "tomba"
+                ? "Tomba domain search (~1 credit per site). Keys must be set in Vercel."
+                : "Fetch each website and parse HTML for emails (free, lower hit rate)."}
+            </p>
+            {!tombaConfigured && (
+              <p className="mt-1 text-[11px] text-muted">
+                Tomba unavailable — add{" "}
+                <code className="text-fg">TOMBA_API_KEY</code> +{" "}
+                <code className="text-fg">TOMBA_API_SECRET</code> to enable.
+              </p>
+            )}
+          </div>
+        )}
 
         {values.scrapeEmails && (
           <label className="flex cursor-pointer items-center gap-2 text-sm">
@@ -247,13 +299,6 @@ export function RunConfig({
           </label>
         )}
 
-        {values.scrapeEmails && (
-          <p className="text-[11px] text-muted">
-            Google Places has no email field — we scrape websites after search. Many
-            agencies use contact forms only; splitting areas + extra terms improves
-            coverage.
-          </p>
-        )}
       </div>
 
       <div className="border-t border-border p-4">

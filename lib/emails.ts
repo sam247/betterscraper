@@ -1,6 +1,12 @@
+import {
+  domainFromWebsite,
+  isTombaConfigured,
+  searchDomainEmails,
+} from "./tomba";
+
 const FETCH_TIMEOUT_MS = 10_000;
 const MAX_HTML_BYTES = 768_000;
-const PAGE_TOKEN_DELAY_MS = 2_000;
+const TOMBA_RATE_MS = 250;
 
 const STATIC_PATHS = [
   "",
@@ -298,6 +304,41 @@ export async function scrapeEmailsFromWebsite(website: string): Promise<string[]
   return Array.from(emails).slice(0, 3);
 }
 
+async function resolveEmailsForRow(
+  row: { name: string; website: string },
+  options: { useTomba: boolean; useScrape: boolean }
+): Promise<{ emails: string[]; source: string }> {
+  const domain = domainFromWebsite(row.website);
+  const emails = new Set<string>();
+  let source = "none";
+
+  if (options.useTomba && domain) {
+    const { emails: tombaEmails, error } = await searchDomainEmails(
+      domain,
+      row.name
+    );
+    if (tombaEmails.length > 0) {
+      for (const e of tombaEmails) emails.add(e);
+      source = "tomba";
+    } else if (error && !error.includes("not configured")) {
+      source = `tomba: ${error}`;
+    }
+    await sleep(TOMBA_RATE_MS);
+  }
+
+  if (emails.size === 0 && options.useScrape) {
+    const scraped = await scrapeEmailsFromWebsite(row.website);
+    if (scraped.length > 0) {
+      for (const e of scraped) emails.add(e);
+      source = source.startsWith("tomba:") ? `scrape (${source})` : "scrape";
+    } else if (source === "none") {
+      source = "none";
+    }
+  }
+
+  return { emails: Array.from(emails).slice(0, 5), source };
+}
+
 export async function enrichResultsWithEmails<
   T extends { name: string; website: string; email?: string },
 >(
@@ -306,17 +347,39 @@ export async function enrichResultsWithEmails<
     onProgress?: (message: string) => void;
     concurrency?: number;
     onlyWithEmail?: boolean;
+    useTomba?: boolean;
+    useScrape?: boolean;
   } = {}
 ): Promise<T[]> {
-  const { onProgress, concurrency = 4, onlyWithEmail = false } = options;
+  const {
+    onProgress,
+    concurrency = 4,
+    onlyWithEmail = false,
+    useTomba = isTombaConfigured(),
+    useScrape = true,
+  } = options;
   const withWebsites = results.filter((r) => r.website?.trim()).length;
 
   if (withWebsites === 0) {
-    onProgress?.("No websites to scrape for emails.");
+    onProgress?.("No websites to look up emails for.");
     return onlyWithEmail ? [] : results.map((r) => ({ ...r, email: r.email ?? "" }));
   }
 
-  onProgress?.(`Scraping emails from ${withWebsites} websites…`);
+  if (!useTomba && !useScrape) {
+    onProgress?.("No email lookup methods enabled.");
+    return onlyWithEmail ? [] : results.map((r) => ({ ...r, email: r.email ?? "" }));
+  }
+
+  const methods = [
+    useTomba && isTombaConfigured() ? "Tomba" : null,
+    useScrape ? "website scrape" : null,
+  ]
+    .filter(Boolean)
+    .join(" → ");
+
+  onProgress?.(
+    `Finding emails for ${withWebsites} websites (${methods || "no methods enabled"}).`
+  );
 
   let emailsFound = 0;
   const enriched: T[] = new Array(results.length);
@@ -331,10 +394,13 @@ export async function enrichResultsWithEmails<
         continue;
       }
 
-      const emails = await scrapeEmailsFromWebsite(row.website);
+      const { emails, source } = await resolveEmailsForRow(row, {
+        useTomba: useTomba && isTombaConfigured(),
+        useScrape,
+      });
       if (emails.length > 0) emailsFound += 1;
       onProgress?.(
-        `[email] ${row.name}: ${emails.length ? emails.join(", ") : "none found"}`
+        `[${source}] ${row.name}: ${emails.length ? emails.join(", ") : "none found"}`
       );
       enriched[i] = { ...row, email: emails.join(", ") };
     }
@@ -345,7 +411,7 @@ export async function enrichResultsWithEmails<
   );
   await Promise.all(workers);
 
-  onProgress?.(`Email scrape complete: ${emailsFound}/${withWebsites} with emails.`);
+  onProgress?.(`Email lookup complete: ${emailsFound}/${withWebsites} with emails.`);
 
   let finalResults = enriched;
   if (onlyWithEmail) {

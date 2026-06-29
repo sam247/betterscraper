@@ -1,11 +1,17 @@
 import { NextResponse } from "next/server";
 import { enrichResultsWithEmails } from "@/lib/emails";
+import { isTombaConfigured } from "@/lib/tomba";
 import type { NormalisedPlace } from "@/lib/places";
 
 export const maxDuration = 300;
 
 export async function POST(req: Request) {
-  let body: { results?: NormalisedPlace[] };
+  let body: {
+    results?: NormalisedPlace[];
+    useTomba?: boolean;
+    useScrape?: boolean;
+    onlyWithEmail?: boolean;
+  };
   try {
     body = await req.json();
   } catch {
@@ -22,7 +28,10 @@ export async function POST(req: Request) {
   try {
     const enriched = await enrichResultsWithEmails(results, {
       onProgress: (msg) => log.push(msg),
-      concurrency: 4,
+      concurrency: body.useTomba !== false && isTombaConfigured() ? 2 : 4,
+      useTomba: body.useTomba !== false,
+      useScrape: body.useScrape !== false,
+      onlyWithEmail: body.onlyWithEmail === true,
     });
     const emailsFound = enriched.filter((r) => r.email?.trim()).length;
     log.push(`Emails found for ${emailsFound} of ${results.length} places.`);
