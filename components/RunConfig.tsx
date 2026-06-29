@@ -13,7 +13,7 @@ import {
   PLACE_CATEGORY_GROUPS,
 } from "@/lib/place-categories";
 
-export type EmailSource = "tomba" | "scrape";
+export type EmailSource = "tomba-then-scrape" | "scrape" | "tomba";
 
 export interface RunConfigValues {
   country: string;
@@ -25,6 +25,7 @@ export interface RunConfigValues {
   emailSource: EmailSource;
   onlyWithEmail: boolean;
   verifyWithLeadRocks: boolean;
+  skipDirectorySites: boolean;
   splitByArea: boolean;
   categoryId: string;
 }
@@ -228,47 +229,74 @@ export function RunConfig({
           <div>
             <span className={labelClass}>Email source</span>
             <div
-              className="flex rounded-md border border-border p-0.5"
+              className="flex flex-col gap-1 rounded-md border border-border p-1"
               role="group"
               aria-label="Email source"
             >
               <button
                 type="button"
                 disabled={!tombaConfigured}
-                onClick={() => onChange({ emailSource: "tomba" })}
-                className={`flex-1 rounded px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                  values.emailSource === "tomba"
+                onClick={() => onChange({ emailSource: "tomba-then-scrape" })}
+                className={`rounded px-2.5 py-1.5 text-left text-xs font-medium transition-colors ${
+                  values.emailSource === "tomba-then-scrape"
                     ? "bg-elevated text-fg"
                     : "text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
                 }`}
               >
-                Tomba
+                Tomba → scrape fallback
+                <span className="mt-0.5 block font-normal text-[10px] text-muted">
+                  Recommended · Tomba first, free scrape on misses
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => onChange({ emailSource: "scrape" })}
-                className={`flex-1 rounded px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                className={`rounded px-2.5 py-1.5 text-left text-xs font-medium transition-colors ${
                   values.emailSource === "scrape"
                     ? "bg-elevated text-fg"
                     : "text-muted hover:text-fg"
                 }`}
               >
-                Website scrape
+                Website scrape only
+              </button>
+              <button
+                type="button"
+                disabled={!tombaConfigured}
+                onClick={() => onChange({ emailSource: "tomba" })}
+                className={`rounded px-2.5 py-1.5 text-left text-xs font-medium transition-colors ${
+                  values.emailSource === "tomba"
+                    ? "bg-elevated text-fg"
+                    : "text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+                }`}
+              >
+                Tomba only
               </button>
             </div>
-            <p className="mt-1.5 text-[11px] text-muted">
-              {values.emailSource === "tomba"
-                ? "Tomba domain search (~1 credit per site). Keys must be set in Vercel."
-                : "Fetch each website and parse HTML for emails (free, lower hit rate)."}
-            </p>
             {!tombaConfigured && (
               <p className="mt-1 text-[11px] text-muted">
                 Tomba unavailable — add{" "}
                 <code className="text-fg">TOMBA_API_KEY</code> +{" "}
-                <code className="text-fg">TOMBA_API_SECRET</code> to enable.
+                <code className="text-fg">TOMBA_API_SECRET</code> to enable cascade.
               </p>
             )}
           </div>
+        )}
+
+        {values.scrapeEmails && (
+          <label className="flex cursor-pointer items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={values.skipDirectorySites}
+              onChange={(e) => onChange({ skipDirectorySites: e.target.checked })}
+              className="mt-0.5 h-4 w-4 rounded border-border accent-accent"
+            />
+            <span>
+              Skip directory &amp; social URLs
+              <span className="block text-[11px] text-muted">
+                Facebook, Yell, Checkatrade, Google links, etc.
+              </span>
+            </span>
+          </label>
         )}
 
         {values.scrapeEmails && (

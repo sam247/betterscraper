@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { ExtractionLog } from "@/components/ExtractionLog";
+import { RunProgressBar, type RunProgress } from "@/components/RunProgressBar";
 import { ResultsTable } from "@/components/ResultsTable";
 import { RunConfig, type RunConfigValues } from "@/components/RunConfig";
 import { StatsBar } from "@/components/StatsBar";
@@ -15,9 +16,10 @@ import {
   getPlaceCategory,
 } from "@/lib/place-categories";
 import { PLACES_MAX_PER_TERM, type NormalisedPlace } from "@/lib/places";
+import { partitionForEmailLookup } from "@/lib/website-filter";
 
 const defaultCategory = getPlaceCategory(DEFAULT_CATEGORY_ID)!;
-const EMAIL_BATCH_SIZE = 40;
+const EMAIL_BATCH_SIZE = 12;
 const VERIFY_BATCH_SIZE = 30;
 
 const initialConfig: RunConfigValues = {
@@ -27,9 +29,10 @@ const initialConfig: RunConfigValues = {
   searchTerms: defaultCategory.label,
   maxResults: 60,
   scrapeEmails: true,
-  emailSource: "scrape",
+  emailSource: "tomba-then-scrape",
   onlyWithEmail: false,
   verifyWithLeadRocks: false,
+  skipDirectorySites: true,
   splitByArea: true,
   categoryId: DEFAULT_CATEGORY_ID,
 };
@@ -70,6 +73,13 @@ function mergePlaces(
   return added;
 }
 
+const idleProgress: RunProgress = {
+  phase: "idle",
+  label: "",
+  current: 0,
+  total: 0,
+};
+
 export default function Home() {
   const [config, setConfig] = useState<RunConfigValues>(initialConfig);
   const [running, setRunning] = useState(false);
@@ -82,6 +92,7 @@ export default function Home() {
   const [tombaConfigured, setTombaConfigured] = useState(false);
   const [leadrocksConfigured, setLeadrocksConfigured] = useState(false);
   const [statusRefreshKey, setStatusRefreshKey] = useState(0);
+  const [runProgress, setRunProgress] = useState<RunProgress>(idleProgress);
 
   useEffect(() => {
     fetch("/api/status")
@@ -91,11 +102,12 @@ export default function Home() {
         const hasLeadRocks = !!data.leadrocks;
         setTombaConfigured(hasTomba);
         setLeadrocksConfigured(hasLeadRocks);
-        if (!hasTomba) {
-          setConfig((prev) =>
-            prev.emailSource === "tomba" ? { ...prev, emailSource: "scrape" } : prev
-          );
-        }
+        setConfig((prev) => {
+          if (!hasTomba && prev.emailSource !== "scrape") {
+            return { ...prev, emailSource: "scrape" };
+          }
+          return prev;
+        });
       })
       .catch(() => {});
   }, []);
@@ -157,6 +169,7 @@ export default function Home() {
     setTotalResults(0);
     setDedupedCount(0);
     setEmailsFound(0);
+    setRunProgress({ phase: "places", label: "Searching Google Places", current: 0, total: 0 });
 
     const terms = config.searchTerms
       .split("\n")
@@ -183,17 +196,36 @@ export default function Home() {
     let rawTotal = 0;
     const buildLog: string[] = [];
 
+    const areaCount = subAreas?.length ?? 1;
+    const placesSteps = areaCount * terms.length;
+
     try {
       if (subAreas && subAreas.length > 0) {
         buildLog.push(
           `Area split: ${subAreas.length} boroughs × ${terms.length} term(s) (up to ${PLACES_MAX_PER_TERM} each).`
         );
         setLog([...buildLog]);
+        setRunProgress({
+          phase: "places",
+          label: "Searching Google Places",
+          current: 0,
+          total: placesSteps,
+        });
 
         for (let i = 0; i < subAreas.length; i++) {
           const area = subAreas[i];
           buildLog.push(`--- [${i + 1}/${subAreas.length}] ${area} ---`);
           setLog([...buildLog]);
+
+          for (let t = 0; t < terms.length; t++) {
+            setRunProgress({
+              phase: "places",
+              label: "Searching Google Places",
+              current: i * terms.length + t,
+              total: placesSteps,
+              detail: `${area} · ${terms[t]}`,
+            });
+          }
 
           const data = await runPlacesBuild(area);
           rawTotal += data.totalResults ?? 0;
@@ -204,7 +236,20 @@ export default function Home() {
           setTotalResults(rawTotal);
           setDedupedCount(merged.size);
         }
+        setRunProgress({
+          phase: "places",
+          label: "Places search complete",
+          current: placesSteps,
+          total: placesSteps,
+        });
       } else {
+        setRunProgress({
+          phase: "places",
+          label: "Searching Google Places",
+          current: 0,
+          total: 1,
+          detail: terms.join(", "),
+        });
         const data = await runPlacesBuild();
         rawTotal = data.totalResults ?? 0;
         mergePlaces(merged, data.results || []);
@@ -213,36 +258,72 @@ export default function Home() {
         setResults(Array.from(merged.values()));
         setTotalResults(rawTotal);
         setDedupedCount(merged.size);
+        setRunProgress({
+          phase: "places",
+          label: "Places search complete",
+          current: 1,
+          total: 1,
+        });
       }
 
       let places = Array.from(merged.values());
 
       if (!config.scrapeEmails || places.length === 0) {
         setLog((prev) => [...prev, "Done."]);
+        setRunProgress({ phase: "done", label: "Complete", current: 1, total: 1 });
         return;
       }
 
-      const useTomba = config.emailSource === "tomba" && tombaConfigured;
-      if (config.emailSource === "tomba" && !tombaConfigured) {
-        setError("Tomba is selected but API keys are not configured.");
+      const useTomba =
+        config.emailSource !== "scrape" && tombaConfigured;
+      const useScrape = config.emailSource !== "tomba";
+      if (config.emailSource !== "scrape" && !tombaConfigured) {
+        setError("Tomba cascade selected but API keys are not configured.");
         return;
       }
+
+      const { eligible, skippedNoWebsite, skippedDirectory } =
+        partitionForEmailLookup(places, {
+          skipDirectorySites: config.skipDirectorySites,
+        });
 
       setLog((prev) => [
         ...prev,
-        useTomba ? "Looking up emails via Tomba…" : "Scraping emails from websites…",
+        useTomba && useScrape
+          ? "Finding emails: Tomba → scrape fallback…"
+          : useTomba
+            ? "Looking up emails via Tomba…"
+            : "Scraping emails from websites…",
+        `Email targets: ${eligible.length} sites (${skippedNoWebsite} no website, ${skippedDirectory} directory/social skipped).`,
       ]);
 
       const byId = new Map(places.map((p) => [p.place_id, { ...p }]));
-      const emailLog: string[] = [];
       let totalEmailsFound = 0;
+      const emailTotal = eligible.length;
 
-      for (let i = 0; i < places.length; i += EMAIL_BATCH_SIZE) {
-        const batch = places.slice(i, i + EMAIL_BATCH_SIZE);
-        emailLog.push(
-          `Email batch ${Math.floor(i / EMAIL_BATCH_SIZE) + 1}/${Math.ceil(places.length / EMAIL_BATCH_SIZE)} (${batch.length} sites)…`
-        );
-        setLog((prev) => [...prev, ...emailLog.slice(-1)]);
+      setRunProgress({
+        phase: "emails",
+        label: "Finding emails",
+        current: 0,
+        total: emailTotal,
+      });
+
+      for (let i = 0; i < eligible.length; i += EMAIL_BATCH_SIZE) {
+        const batch = eligible.slice(i, i + EMAIL_BATCH_SIZE);
+        const batchNum = Math.floor(i / EMAIL_BATCH_SIZE) + 1;
+        const batchTotal = Math.ceil(eligible.length / EMAIL_BATCH_SIZE);
+
+        setRunProgress({
+          phase: "emails",
+          label: "Finding emails",
+          current: i,
+          total: emailTotal,
+          detail: `Batch ${batchNum}/${batchTotal} · ${batch.length} sites`,
+        });
+        setLog((prev) => [
+          ...prev,
+          `Email batch ${batchNum}/${batchTotal} (${batch.length} sites)…`,
+        ]);
 
         const emailRes = await fetch("/api/emails", {
           method: "POST",
@@ -250,7 +331,8 @@ export default function Home() {
           body: JSON.stringify({
             results: batch,
             useTomba,
-            useScrape: config.emailSource === "scrape",
+            useScrape,
+            skipDirectorySites: config.skipDirectorySites,
           }),
         });
 
@@ -268,10 +350,16 @@ export default function Home() {
         totalEmailsFound = Array.from(byId.values()).filter((r) =>
           r.email?.trim()
         ).length;
-        emailLog.push(...(emailData.log || []));
         setLog((prev) => [...prev, ...(emailData.log || [])]);
         setResults(Array.from(byId.values()));
         setEmailsFound(totalEmailsFound);
+        setRunProgress({
+          phase: "emails",
+          label: "Finding emails",
+          current: Math.min(i + batch.length, emailTotal),
+          total: emailTotal,
+          detail: `${totalEmailsFound} found so far`,
+        });
       }
 
       places = Array.from(byId.values());
@@ -285,7 +373,14 @@ export default function Home() {
 
         const withEmail = places.filter((r) => r.email?.trim());
         const verifyById = new Map(places.map((p) => [p.place_id, { ...p }]));
-        let totalValid = 0;
+        const verifyTotal = withEmail.length;
+
+        setRunProgress({
+          phase: "verify",
+          label: "Verifying emails",
+          current: 0,
+          total: verifyTotal,
+        });
 
         for (let i = 0; i < withEmail.length; i += VERIFY_BATCH_SIZE) {
           const batch = withEmail.slice(i, i + VERIFY_BATCH_SIZE);
@@ -320,12 +415,19 @@ export default function Home() {
             }
           }
 
-          totalValid = Array.from(verifyById.values()).filter((r) =>
+          totalEmailsFound = Array.from(verifyById.values()).filter((r) =>
             r.email?.trim()
           ).length;
           setLog((prev) => [...prev, ...(verifyData.log || [])]);
           setResults(Array.from(verifyById.values()));
-          setEmailsFound(totalValid);
+          setEmailsFound(totalEmailsFound);
+          setRunProgress({
+            phase: "verify",
+            label: "Verifying emails",
+            current: Math.min(i + batch.length, verifyTotal),
+            total: verifyTotal,
+            detail: `${totalEmailsFound} valid so far`,
+          });
         }
 
         places = Array.from(verifyById.values()).filter((r) => r.email?.trim());
@@ -351,6 +453,7 @@ export default function Home() {
 
       setEmailsFound(places.filter((r) => r.email?.trim()).length);
       setLog((prev) => [...prev, "Done."]);
+      setRunProgress({ phase: "done", label: "Complete", current: 1, total: 1 });
     } catch (e) {
       setError(
         e instanceof Error
@@ -360,6 +463,9 @@ export default function Home() {
     } finally {
       setRunning(false);
       setStatusRefreshKey((k) => k + 1);
+      setRunProgress((prev) =>
+        prev.phase === "done" ? prev : idleProgress
+      );
     }
   }, [config, runPlacesBuild, tombaConfigured, leadrocksConfigured]);
 
@@ -394,6 +500,7 @@ export default function Home() {
             locationLabel={locationLabel}
             termCount={termCount}
           />
+          <RunProgressBar running={running} progress={runProgress} />
           <ExtractionLog log={log} running={running} />
           <ResultsTable results={results} running={running} onExport={exportCsv} />
         </main>

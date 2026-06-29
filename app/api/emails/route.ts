@@ -10,6 +10,7 @@ export async function POST(req: Request) {
     results?: NormalisedPlace[];
     useTomba?: boolean;
     useScrape?: boolean;
+    skipDirectorySites?: boolean;
     onlyWithEmail?: boolean;
   };
   try {
@@ -28,9 +29,10 @@ export async function POST(req: Request) {
   try {
     const enriched = await enrichResultsWithEmails(results, {
       onProgress: (msg) => log.push(msg),
-      concurrency: body.useTomba !== false && isTombaConfigured() ? 2 : 4,
-      useTomba: body.useTomba !== false,
+      concurrency: body.useTomba === true && isTombaConfigured() ? 2 : 4,
+      useTomba: body.useTomba === true,
       useScrape: body.useScrape !== false,
+      skipDirectorySites: body.skipDirectorySites !== false,
       onlyWithEmail: body.onlyWithEmail === true,
     });
     const emailsFound = enriched.filter((r) => r.email?.trim()).length;

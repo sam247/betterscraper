@@ -1,15 +1,24 @@
+import { filterJunkEmails, isJunkEmail } from "./email-junk";
+import { pickPrimaryEmail } from "./email-pick";
 import {
   domainFromWebsite,
   isTombaConfigured,
   searchDomainEmails,
 } from "./tomba";
+import { hostnameFromWebsite, isDirectoryOrSocialWebsite } from "./website-filter";
 
-const FETCH_TIMEOUT_MS = 10_000;
+const FETCH_TIMEOUT_MS = 12_000;
 const MAX_HTML_BYTES = 768_000;
 const TOMBA_RATE_MS = 250;
+const PAGE_DELAY_MS = 80;
 
-const STATIC_PATHS = [
-  "",
+function canLookupWebsite(website: string, skipDirectorySites: boolean): boolean {
+  if (!website?.trim()) return false;
+  if (skipDirectorySites && isDirectoryOrSocialWebsite(website)) return false;
+  return !!hostnameFromWebsite(website);
+}
+
+const CONTACT_PATHS = [
   "/contact",
   "/contact-us",
   "/contactus",
@@ -18,8 +27,6 @@ const STATIC_PATHS = [
   "/enquiry",
   "/about",
   "/about-us",
-  "/team",
-  "/our-team",
 ];
 
 const EMAIL_REGEX =
@@ -33,49 +40,54 @@ const CF_EMAIL_HASH_REGEX =
 const CONTACT_LINK_REGEX =
   /href=["']([^"']*(?:contact|enquir|get-in-touch|about|team)[^"']*)["']/gi;
 
-const JUNK_EMAIL_PATTERNS = [
-  /noreply/i,
-  /no-reply/i,
-  /donotreply/i,
-  /example\.com$/i,
-  /wixpress\.com$/i,
-  /sentry\.io$/i,
-  /gravatar\.com$/i,
-  /wordpress\.com$/i,
-  /cloudflare/i,
-  /github\.com$/i,
-  /schema\.org$/i,
-  /\.png$/i,
-  /\.jpg$/i,
-  /\.gif$/i,
-  /\.webp$/i,
-  /email@/i,
-  /your@/i,
-  /name@/i,
-  /user@/i,
-  /test@/i,
-  /sample@/i,
-  /@sentry\./i,
-  /wix\.com$/i,
-];
-
 const FETCH_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  Accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
   "Accept-Language": "en-GB,en;q=0.9",
+  "Accept-Encoding": "gzip, deflate, br",
+  "Cache-Control": "no-cache",
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "none",
+  "Upgrade-Insecure-Requests": "1",
 };
+
+function buildFetchUrlVariants(website: string): string[] {
+  let parsed: URL;
+  try {
+    parsed = new URL(
+      website.startsWith("http") ? website : `https://${website}`
+    );
+  } catch {
+    return [];
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const bare = host.replace(/^www\./, "");
+  const path = parsed.pathname === "/" ? "" : parsed.pathname;
+  const search = parsed.search;
+
+  const hosts = [...new Set([host, bare, `www.${bare}`])];
+  const schemes = ["https", "http"];
+  const urls: string[] = [];
+
+  for (const scheme of schemes) {
+    for (const h of hosts) {
+      urls.push(`${scheme}://${h}${path}${search}`);
+      if (!path) urls.push(`${scheme}://${h}/`);
+    }
+  }
+
+  return [...new Set(urls)];
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function isJunkEmail(email: string): boolean {
-  const lower = email.toLowerCase();
-  return JUNK_EMAIL_PATTERNS.some((p) => p.test(lower));
-}
-
-function normalizeEmail(raw: string): string | null {
+function normalizeEmail(raw: string, website?: string): string | null {
   let email = raw.trim().toLowerCase();
   if (email.startsWith("mailto:")) {
     email = email.slice(7);
@@ -84,7 +96,7 @@ function normalizeEmail(raw: string): string | null {
   if (q !== -1) email = email.slice(0, q);
   email = email.replace(/[.,;:!?)>\]'"]+$/g, "");
   if (!email.includes("@") || email.length < 5 || email.length > 254) return null;
-  if (isJunkEmail(email)) return null;
+  if (isJunkEmail(email, website)) return null;
   return email;
 }
 
@@ -223,36 +235,20 @@ async function fetchHtml(url: string): Promise<string | null> {
 
     const contentType = res.headers.get("content-type") || "";
     if (
+      contentType &&
       !contentType.includes("text/html") &&
       !contentType.includes("text/plain") &&
-      !contentType.includes("application/xhtml")
+      !contentType.includes("application/xhtml") &&
+      !contentType.includes("application/json")
     ) {
       return null;
     }
 
-    const reader = res.body?.getReader();
-    if (!reader) return null;
-
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_HTML_BYTES) break;
-      chunks.push(value);
+    const text = await res.text();
+    if (!text || text.length > MAX_HTML_BYTES) {
+      return text ? text.slice(0, MAX_HTML_BYTES) : null;
     }
-
-    const decoder = new TextDecoder("utf-8", { fatal: false });
-    const combined = chunks.reduce((acc, chunk) => {
-      const merged = new Uint8Array(acc.length + chunk.length);
-      merged.set(acc);
-      merged.set(chunk, acc.length);
-      return merged;
-    }, new Uint8Array());
-
-    return decoder.decode(combined);
+    return text;
   } catch {
     return null;
   } finally {
@@ -260,25 +256,61 @@ async function fetchHtml(url: string): Promise<string | null> {
   }
 }
 
-export async function scrapeEmailsFromWebsite(website: string): Promise<string[]> {
-  if (!website?.trim()) return [];
-
-  let baseUrl: string;
-  try {
-    baseUrl = new URL(website.startsWith("http") ? website : `https://${website}`).href;
-  } catch {
-    return [];
+async function fetchFirstHtml(
+  urls: string[]
+): Promise<{ html: string; url: string } | null> {
+  for (const url of urls) {
+    const html = await fetchHtml(url);
+    if (html) return { html, url };
   }
+  return null;
+}
+
+export async function scrapeEmailsFromWebsite(
+  website: string,
+  options: { skipDirectorySites?: boolean } = {}
+): Promise<{ emails: string[]; detail: string }> {
+  const { skipDirectorySites = true } = options;
+  if (!website?.trim()) return { emails: [], detail: "no website" };
+  if (skipDirectorySites && isDirectoryOrSocialWebsite(website)) {
+    return { emails: [], detail: "directory/social URL" };
+  }
+
+  const variants = buildFetchUrlVariants(website);
+  if (variants.length === 0) return { emails: [], detail: "invalid URL" };
 
   const emails = new Set<string>();
   const visited = new Set<string>();
-  const queue: string[] = [];
 
-  for (const path of STATIC_PATHS) {
-    queue.push(resolveUrl(baseUrl, path));
+  const home = await fetchFirstHtml(variants);
+  if (!home) {
+    return { emails: [], detail: "fetch failed (all URL variants)" };
   }
 
-  while (queue.length > 0 && visited.size < 8) {
+  let baseUrl = home.url;
+  visited.add(home.url);
+
+  for (const email of extractEmailsFromHtml(home.html)) {
+    emails.add(email);
+  }
+
+  const homeCleaned = filterJunkEmails(Array.from(emails), website);
+  if (homeCleaned.length > 0) {
+    return {
+      emails: [pickPrimaryEmail(homeCleaned, website)],
+      detail: "homepage",
+    };
+  }
+
+  const queue: string[] = [];
+  for (const path of CONTACT_PATHS) {
+    queue.push(resolveUrl(baseUrl, path));
+  }
+  for (const contactUrl of discoverContactUrls(baseUrl, home.html)) {
+    if (!visited.has(contactUrl)) queue.push(contactUrl);
+  }
+
+  while (queue.length > 0 && visited.size < 6) {
     const url = queue.shift()!;
     if (visited.has(url)) continue;
     visited.add(url);
@@ -290,26 +322,40 @@ export async function scrapeEmailsFromWebsite(website: string): Promise<string[]
       emails.add(email);
     }
 
-    if (emails.size >= 3) break;
-
-    if (visited.size === 1) {
-      for (const contactUrl of discoverContactUrls(baseUrl, html)) {
-        if (!visited.has(contactUrl)) queue.push(contactUrl);
-      }
-    }
-
-    await sleep(100);
+    const cleaned = filterJunkEmails(Array.from(emails), website);
+    if (cleaned.length > 0) break;
+    await sleep(PAGE_DELAY_MS);
   }
 
-  return Array.from(emails).slice(0, 3);
+  const finalCleaned = filterJunkEmails(Array.from(emails), website);
+  if (finalCleaned.length === 0) {
+    return { emails: [], detail: `no email in ${visited.size} page(s)` };
+  }
+
+  return {
+    emails: [pickPrimaryEmail(finalCleaned, website)],
+    detail: `found on ${visited.size} page(s)`,
+  };
 }
 
 async function resolveEmailsForRow(
   row: { name: string; website: string },
-  options: { useTomba: boolean; useScrape: boolean }
-): Promise<{ emails: string[]; source: string }> {
-  const domain = domainFromWebsite(row.website);
-  const emails = new Set<string>();
+  options: {
+    useTomba: boolean;
+    useScrape: boolean;
+    skipDirectorySites?: boolean;
+    domainCache?: Map<string, { email: string; source: string }>;
+  }
+): Promise<{ email: string; source: string }> {
+  const domain = domainFromWebsite(row.website) || hostnameFromWebsite(row.website);
+  const cacheKey = domain || row.website.trim().toLowerCase();
+
+  if (options.domainCache?.has(cacheKey)) {
+    const cached = options.domainCache.get(cacheKey)!;
+    return cached;
+  }
+
+  const found = new Set<string>();
   let source = "none";
 
   if (options.useTomba && domain) {
@@ -318,7 +364,7 @@ async function resolveEmailsForRow(
       row.name
     );
     if (tombaEmails.length > 0) {
-      for (const e of tombaEmails) emails.add(e);
+      for (const e of tombaEmails) found.add(e);
       source = "tomba";
     } else if (error && !error.includes("not configured")) {
       source = `tomba: ${error}`;
@@ -326,17 +372,27 @@ async function resolveEmailsForRow(
     await sleep(TOMBA_RATE_MS);
   }
 
-  if (emails.size === 0 && options.useScrape) {
-    const scraped = await scrapeEmailsFromWebsite(row.website);
-    if (scraped.length > 0) {
-      for (const e of scraped) emails.add(e);
+  if (found.size === 0 && options.useScrape) {
+    const scraped = await scrapeEmailsFromWebsite(row.website, {
+      skipDirectorySites: options.skipDirectorySites,
+    });
+    if (scraped.emails.length > 0) {
+      for (const e of scraped.emails) found.add(e);
       source = source.startsWith("tomba:") ? `scrape (${source})` : "scrape";
     } else if (source === "none") {
-      source = "none";
+      source = `scrape: ${scraped.detail}`;
+    } else if (source.startsWith("tomba:")) {
+      source = `${source}; scrape: ${scraped.detail}`;
     }
   }
 
-  return { emails: Array.from(emails).slice(0, 5), source };
+  const email = pickPrimaryEmail(Array.from(found), row.website);
+  const result = {
+    email,
+    source: email ? source : source === "none" ? "none" : `${source} (junk filtered)`,
+  };
+  options.domainCache?.set(cacheKey, result);
+  return result;
 }
 
 export async function enrichResultsWithEmails<
@@ -345,20 +401,32 @@ export async function enrichResultsWithEmails<
   results: T[],
   options: {
     onProgress?: (message: string) => void;
+    onRowComplete?: (
+      processed: number,
+      total: number,
+      name: string,
+      email: string
+    ) => void;
     concurrency?: number;
     onlyWithEmail?: boolean;
     useTomba?: boolean;
     useScrape?: boolean;
+    skipDirectorySites?: boolean;
   } = {}
 ): Promise<T[]> {
   const {
     onProgress,
+    onRowComplete,
     concurrency = 4,
     onlyWithEmail = false,
     useTomba = isTombaConfigured(),
     useScrape = true,
+    skipDirectorySites = true,
   } = options;
-  const withWebsites = results.filter((r) => r.website?.trim()).length;
+  const scrapable = results.filter((r) =>
+    canLookupWebsite(r.website ?? "", skipDirectorySites)
+  );
+  const withWebsites = scrapable.length;
 
   if (withWebsites === 0) {
     onProgress?.("No websites to look up emails for.");
@@ -372,37 +440,43 @@ export async function enrichResultsWithEmails<
 
   const methods = [
     useTomba && isTombaConfigured() ? "Tomba" : null,
-    useScrape ? "website scrape" : null,
+    useScrape ? "scrape fallback" : null,
   ]
     .filter(Boolean)
     .join(" → ");
 
   onProgress?.(
-    `Finding emails for ${withWebsites} websites (${methods || "no methods enabled"}).`
+    `Finding emails for ${withWebsites} scrapable sites (${methods || "no methods enabled"}).`
   );
 
   let emailsFound = 0;
+  let processed = 0;
   const enriched: T[] = new Array(results.length);
+  const domainCache = new Map<string, { email: string; source: string }>();
   let index = 0;
 
   async function worker(): Promise<void> {
     while (index < results.length) {
       const i = index++;
       const row = results[i];
-      if (!row.website?.trim()) {
+      if (!canLookupWebsite(row.website ?? "", skipDirectorySites)) {
         enriched[i] = { ...row, email: row.email ?? "" };
         continue;
       }
 
-      const { emails, source } = await resolveEmailsForRow(row, {
+      const { email, source } = await resolveEmailsForRow(row, {
         useTomba: useTomba && isTombaConfigured(),
         useScrape,
+        skipDirectorySites,
+        domainCache,
       });
-      if (emails.length > 0) emailsFound += 1;
+      processed += 1;
+      if (email) emailsFound += 1;
       onProgress?.(
-        `[${source}] ${row.name}: ${emails.length ? emails.join(", ") : "none found"}`
+        `[${source}] ${row.name}: ${email || "none found"}`
       );
-      enriched[i] = { ...row, email: emails.join(", ") };
+      onRowComplete?.(processed, withWebsites, row.name, email);
+      enriched[i] = { ...row, email };
     }
   }
 

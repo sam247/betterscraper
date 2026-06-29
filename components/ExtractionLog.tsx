@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface ExtractionLogProps {
   log: string[];
@@ -10,10 +10,16 @@ interface ExtractionLogProps {
 export function ExtractionLog({ log, running }: ExtractionLogProps) {
   const [open, setOpen] = useState(false);
 
+  useEffect(() => {
+    if (running) setOpen(true);
+  }, [running]);
+
   const text =
     log.length === 0 && !running
       ? "Run an extraction to see log output."
       : log.join("\n");
+
+  const latestLine = log.length > 0 ? log[log.length - 1] : null;
 
   const summary =
     log.length === 0
@@ -44,6 +50,9 @@ export function ExtractionLog({ log, running }: ExtractionLogProps) {
           <span className="text-fg">{open ? "−" : "+"}</span>
         </span>
       </button>
+      {!open && running && latestLine && (
+        <p className="mb-1 truncate font-mono text-[11px] text-muted">{latestLine}</p>
+      )}
       {open && (
         <div className="mb-2 max-h-36 overflow-y-auto rounded-md border border-border bg-elevated px-3 py-2 font-mono text-[11px] leading-relaxed text-muted">
           <pre className="m-0 whitespace-pre-wrap break-words">{text}</pre>
