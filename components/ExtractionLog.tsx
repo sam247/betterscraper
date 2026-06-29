@@ -7,7 +7,7 @@ export function ExtractionLog({ log, running }: ExtractionLogProps) {
   const text =
     log.length === 0 && !running
       ? "Run an extraction to see log output."
-      : log.join("\n") + (running && log.length === 0 ? "\nStarting…" : "");
+      : log.join("\n");
 
   return (
     <div className="border-b border-border px-4 py-3 lg:px-6">

@@ -6,6 +6,7 @@ import { ExtractionLog } from "@/components/ExtractionLog";
 import { ResultsTable } from "@/components/ResultsTable";
 import { RunConfig, type RunConfigValues } from "@/components/RunConfig";
 import { StatsBar } from "@/components/StatsBar";
+import { readApiJson } from "@/lib/api-client";
 import { DEFAULT_COUNTRY } from "@/lib/countries";
 import { downloadCsv } from "@/lib/csv";
 import {
@@ -25,6 +26,20 @@ const initialConfig: RunConfigValues = {
   scrapeEmails: true,
   categoryId: DEFAULT_CATEGORY_ID,
 };
+
+interface BuildResponse {
+  log: string[];
+  results: NormalisedPlace[];
+  totalResults: number;
+  dedupedCount: number;
+}
+
+interface EmailsResponse {
+  log: string[];
+  results: NormalisedPlace[];
+  emailsFound: number;
+  error?: string;
+}
 
 export default function Home() {
   const [config, setConfig] = useState<RunConfigValues>(initialConfig);
@@ -57,7 +72,7 @@ export default function Home() {
   const runExtraction = useCallback(async () => {
     setRunning(true);
     setError(null);
-    setLog([]);
+    setLog(["Searching Google Places…"]);
     setResults([]);
     setTotalResults(0);
     setDedupedCount(0);
@@ -79,18 +94,8 @@ export default function Home() {
       return;
     }
 
-    const category =
-      config.categoryId !== "custom"
-        ? getPlaceCategory(config.categoryId)
-        : undefined;
-
-    const includedTypes =
-      category && terms.length === 1 && terms[0] === category.label
-        ? [category.id]
-        : undefined;
-
     try {
-      const res = await fetch("/api/build", {
+      const buildRes = await fetch("/api/build", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -98,24 +103,54 @@ export default function Home() {
           state: config.state.trim(),
           city: config.city.trim() || undefined,
           searchTerms: terms,
-          includedTypes,
           maxResults: Number(config.maxResults) || 60,
-          scrapeEmails: config.scrapeEmails,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Build failed.");
-        setRunning(false);
+
+      const buildData = await readApiJson<BuildResponse & { error?: string }>(buildRes);
+      if (!buildRes.ok) {
+        setError(buildData.error || "Places search failed.");
+        setLog(buildData.log || []);
         return;
       }
-      setLog(data.log || []);
-      setResults(data.results || []);
-      setTotalResults(data.totalResults ?? 0);
-      setDedupedCount(data.dedupedCount ?? 0);
-      setEmailsFound(data.emailsFound ?? 0);
+
+      setLog(buildData.log || []);
+      setResults(buildData.results || []);
+      setTotalResults(buildData.totalResults ?? 0);
+      setDedupedCount(buildData.dedupedCount ?? 0);
+
+      if (!config.scrapeEmails || (buildData.results?.length ?? 0) === 0) {
+        setLog((prev) => [...prev, "Done."]);
+        return;
+      }
+
+      setLog((prev) => [...prev, "Scraping emails from websites…"]);
+
+      const emailRes = await fetch("/api/emails", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ results: buildData.results }),
+      });
+
+      const emailData = await readApiJson<EmailsResponse>(emailRes);
+      if (!emailRes.ok) {
+        setError(
+          emailData.error ||
+            "Places loaded but email scraping failed. You can still export without emails."
+        );
+        setLog((prev) => [...prev, ...(emailData.log || []), "Email scrape failed."]);
+        return;
+      }
+
+      setLog((prev) => [...prev, ...(emailData.log || []), "Done."]);
+      setResults(emailData.results || buildData.results);
+      setEmailsFound(emailData.emailsFound ?? 0);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Request failed.");
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Request failed. The server may have timed out on Vercel — try fewer results."
+      );
     } finally {
       setRunning(false);
     }

@@ -1,6 +1,5 @@
-import { enrichResultsWithEmails } from "./emails";
-
 const RATE_MS = 200;
+const PLACES_FETCH_TIMEOUT_MS = 25_000;
 const SEARCH_TEXT_URL = "https://places.googleapis.com/v1/places:searchText";
 
 const SEARCH_FIELD_MASK = [
@@ -38,22 +37,19 @@ export interface NormalisedPlace {
 /** @deprecated Use NormalisedPlace */
 export type NormalisedClinic = NormalisedPlace;
 
-export interface BuildInput {
+export interface PlacesSearchInput {
   country: string;
   state: string;
   city?: string;
   searchTerms: string[];
-  includedTypes?: (string | undefined)[];
   maxResults: number;
-  scrapeEmails?: boolean;
 }
 
-export interface BuildResult {
+export interface PlacesSearchResult {
   log: string[];
   results: NormalisedPlace[];
   totalResults: number;
   dedupedCount: number;
-  emailsFound: number;
 }
 
 interface AddressComponent {
@@ -98,40 +94,59 @@ function buildQuery(term: string, state: string, country: string, city?: string)
 async function textSearchPage(
   apiKey: string,
   textQuery: string,
-  pageToken?: string,
-  includedType?: string
+  pageToken?: string
 ): Promise<SearchTextResponse> {
   const body: Record<string, unknown> = { textQuery, pageSize: 20 };
   if (pageToken) body.pageToken = pageToken;
-  if (includedType) body.includedType = includedType;
 
-  const res = await fetch(SEARCH_TEXT_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": apiKey,
-      "X-Goog-FieldMask": SEARCH_FIELD_MASK,
-    },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PLACES_FETCH_TIMEOUT_MS);
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
+  try {
+    const res = await fetch(SEARCH_TEXT_URL, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": apiKey,
+        "X-Goog-FieldMask": SEARCH_FIELD_MASK,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return {
+        error: {
+          code: res.status,
+          message: err.error?.message || res.statusText,
+          status: res.status.toString(),
+        },
+      };
+    }
+    return res.json();
+  } catch (e) {
+    const message =
+      e instanceof Error && e.name === "AbortError"
+        ? "Google Places request timed out"
+        : e instanceof Error
+          ? e.message
+          : "Google Places request failed";
     return {
       error: {
-        code: res.status,
-        message: err.error?.message || res.statusText,
-        status: res.status.toString(),
+        message,
+        status: "timeout",
       },
     };
+  } finally {
+    clearTimeout(timer);
   }
-  return res.json();
 }
 
-export async function runExtraction(
-  input: BuildInput,
+export async function runPlacesSearch(
+  input: PlacesSearchInput,
   apiKey: string
-): Promise<BuildResult> {
+): Promise<PlacesSearchResult> {
   const log: string[] = [];
   const seenIds = new Map<string, string>();
   const results: NormalisedPlace[] = [];
@@ -139,25 +154,24 @@ export async function runExtraction(
 
   if (!apiKey?.trim()) {
     log.push("Error: GOOGLE_PLACES_API_KEY is not set.");
-    return { log, results: [], totalResults: 0, dedupedCount: 0, emailsFound: 0 };
+    return { log, results: [], totalResults: 0, dedupedCount: 0 };
   }
 
   const maxResults = Math.min(Math.max(1, input.maxResults || 60), 60);
   const defaultCountry = input.country?.trim() || "United Kingdom";
   const defaultState = input.state?.trim() || "";
 
-  for (let termIndex = 0; termIndex < input.searchTerms.length; termIndex++) {
-    const term = input.searchTerms[termIndex];
-    const includedType = input.includedTypes?.[termIndex];
+  for (const term of input.searchTerms) {
     const query = buildQuery(term.trim(), defaultState, defaultCountry, input.city?.trim());
-    log.push(`[${term}] Query: ${query}${includedType ? ` (type: ${includedType})` : ""}`);
+    log.push(`[${term}] Query: ${query}`);
 
     let totalForTerm = 0;
     let nextPageToken: string | undefined;
+    let emptyPages = 0;
 
     do {
       await sleep(RATE_MS);
-      const resp = await textSearchPage(apiKey, query, nextPageToken, includedType);
+      const resp = await textSearchPage(apiKey, query, nextPageToken);
 
       if (resp.error) {
         log.push(`[${term}] API error: ${resp.error.status || ""} ${resp.error.message || ""}`);
@@ -165,6 +179,16 @@ export async function runExtraction(
       }
 
       const places = resp.places || [];
+      if (places.length === 0) {
+        emptyPages += 1;
+        if (emptyPages >= 2) {
+          log.push(`[${term}] No more results.`);
+          break;
+        }
+      } else {
+        emptyPages = 0;
+      }
+
       totalForTerm += places.length;
       totalRawFromSearch += places.length;
 
@@ -173,7 +197,10 @@ export async function runExtraction(
         seenIds.set(p.id, term);
 
         const ac = p.addressComponents;
-        const city = getComponent(ac, "locality") || getComponent(ac, "administrative_area_level_2") || "";
+        const city =
+          getComponent(ac, "locality") ||
+          getComponent(ac, "administrative_area_level_2") ||
+          "";
         const state = getComponent(ac, "administrative_area_level_1") || defaultState;
         const country = getComponent(ac, "country") || defaultCountry;
         const lat = p.location?.latitude ?? 0;
@@ -196,7 +223,9 @@ export async function runExtraction(
           source_query: term,
           maps_url:
             p.googleMapsUri ??
-            (lat && lng ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}` : ""),
+            (lat && lng
+              ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+              : ""),
         });
       }
 
@@ -213,29 +242,12 @@ export async function runExtraction(
     }
   }
 
-  log.push(
-    `Places search complete: ${totalRawFromSearch} raw, ${results.length} unique.`
-  );
-
-  let finalResults = results;
-  let emailsFound = 0;
-
-  if (input.scrapeEmails && results.length > 0) {
-    finalResults = await enrichResultsWithEmails(results, {
-      onProgress: (msg) => log.push(msg),
-      concurrency: 4,
-    });
-    emailsFound = finalResults.filter((r) => r.email?.trim()).length;
-    log.push(`Emails found for ${emailsFound} of ${results.length} places.`);
-  }
-
-  log.push("Done.");
+  log.push(`Places search complete: ${totalRawFromSearch} raw, ${results.length} unique.`);
 
   return {
     log,
-    results: finalResults,
+    results,
     totalResults: totalRawFromSearch,
-    dedupedCount: finalResults.length,
-    emailsFound,
+    dedupedCount: results.length,
   };
 }

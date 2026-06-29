@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { DEFAULT_COUNTRY } from "@/lib/countries";
-import { runExtraction } from "@/lib/places";
+import { runPlacesSearch } from "@/lib/places";
 
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 export async function POST(req: Request) {
   let body: {
@@ -10,9 +10,7 @@ export async function POST(req: Request) {
     state?: string;
     city?: string;
     searchTerms?: string[];
-    includedTypes?: (string | undefined)[];
     maxResults?: number;
-    scrapeEmails?: boolean;
   };
   try {
     body = await req.json();
@@ -46,19 +44,19 @@ export async function POST(req: Request) {
     );
   }
 
-  const input = {
-    country: typeof body.country === "string" ? body.country : DEFAULT_COUNTRY,
-    state,
-    city: typeof body.city === "string" ? body.city : undefined,
-    searchTerms,
-    includedTypes: Array.isArray(body.includedTypes) ? body.includedTypes : undefined,
-    maxResults:
-      typeof body.maxResults === "number" && body.maxResults > 0
-        ? body.maxResults
-        : 60,
-    scrapeEmails: body.scrapeEmails !== false,
-  };
+  const result = await runPlacesSearch(
+    {
+      country: typeof body.country === "string" ? body.country : DEFAULT_COUNTRY,
+      state,
+      city: typeof body.city === "string" ? body.city : undefined,
+      searchTerms,
+      maxResults:
+        typeof body.maxResults === "number" && body.maxResults > 0
+          ? body.maxResults
+          : 60,
+    },
+    apiKey
+  );
 
-  const result = await runExtraction(input, apiKey);
   return NextResponse.json(result);
 }
