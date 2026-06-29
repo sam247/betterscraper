@@ -18,6 +18,7 @@ import { PLACES_MAX_PER_TERM, type NormalisedPlace } from "@/lib/places";
 
 const defaultCategory = getPlaceCategory(DEFAULT_CATEGORY_ID)!;
 const EMAIL_BATCH_SIZE = 40;
+const VERIFY_BATCH_SIZE = 30;
 
 const initialConfig: RunConfigValues = {
   country: DEFAULT_COUNTRY,
@@ -28,6 +29,7 @@ const initialConfig: RunConfigValues = {
   scrapeEmails: true,
   emailSource: "scrape",
   onlyWithEmail: false,
+  verifyWithLeadRocks: false,
   splitByArea: true,
   categoryId: DEFAULT_CATEGORY_ID,
 };
@@ -44,6 +46,13 @@ interface EmailsResponse {
   log: string[];
   results: NormalisedPlace[];
   emailsFound: number;
+  error?: string;
+}
+
+interface VerifyResponse {
+  log: string[];
+  results: NormalisedPlace[];
+  validEmails: number;
   error?: string;
 }
 
@@ -71,6 +80,7 @@ export default function Home() {
   const [emailsFound, setEmailsFound] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [tombaConfigured, setTombaConfigured] = useState(false);
+  const [leadrocksConfigured, setLeadrocksConfigured] = useState(false);
   const [statusRefreshKey, setStatusRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -78,7 +88,9 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => {
         const hasTomba = !!data.tomba;
+        const hasLeadRocks = !!data.leadrocks;
         setTombaConfigured(hasTomba);
+        setLeadrocksConfigured(hasLeadRocks);
         if (!hasTomba) {
           setConfig((prev) =>
             prev.emailSource === "tomba" ? { ...prev, emailSource: "scrape" } : prev
@@ -264,6 +276,68 @@ export default function Home() {
 
       places = Array.from(byId.values());
 
+      if (
+        config.verifyWithLeadRocks &&
+        leadrocksConfigured &&
+        places.some((r) => r.email?.trim())
+      ) {
+        setLog((prev) => [...prev, "Verifying emails with LeadRocks…"]);
+
+        const withEmail = places.filter((r) => r.email?.trim());
+        const verifyById = new Map(places.map((p) => [p.place_id, { ...p }]));
+        let totalValid = 0;
+
+        for (let i = 0; i < withEmail.length; i += VERIFY_BATCH_SIZE) {
+          const batch = withEmail.slice(i, i + VERIFY_BATCH_SIZE);
+          setLog((prev) => [
+            ...prev,
+            `Verify batch ${Math.floor(i / VERIFY_BATCH_SIZE) + 1}/${Math.ceil(withEmail.length / VERIFY_BATCH_SIZE)} (${batch.length} leads)…`,
+          ]);
+
+          const verifyRes = await fetch("/api/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ results: batch, onlyValid: true }),
+          });
+
+          const verifyData = await readApiJson<VerifyResponse>(verifyRes);
+          if (!verifyRes.ok) {
+            throw new Error(
+              verifyData.error ||
+                "Email verification failed partway through. Partial results are shown."
+            );
+          }
+
+          const verifiedIds = new Set(
+            (verifyData.results || []).map((r) => r.place_id)
+          );
+          for (const row of verifyData.results || []) {
+            verifyById.set(row.place_id, row);
+          }
+          for (const row of batch) {
+            if (!verifiedIds.has(row.place_id)) {
+              verifyById.set(row.place_id, { ...row, email: "" });
+            }
+          }
+
+          totalValid = Array.from(verifyById.values()).filter((r) =>
+            r.email?.trim()
+          ).length;
+          setLog((prev) => [...prev, ...(verifyData.log || [])]);
+          setResults(Array.from(verifyById.values()));
+          setEmailsFound(totalValid);
+        }
+
+        places = Array.from(verifyById.values()).filter((r) => r.email?.trim());
+        setResults(places);
+        setDedupedCount(places.length);
+        setEmailsFound(places.length);
+        setLog((prev) => [
+          ...prev,
+          `LeadRocks: ${places.length} leads with valid email.`,
+        ]);
+      }
+
       if (config.onlyWithEmail) {
         const before = places.length;
         places = places.filter((r) => r.email?.trim());
@@ -287,7 +361,7 @@ export default function Home() {
       setRunning(false);
       setStatusRefreshKey((k) => k + 1);
     }
-  }, [config, runPlacesBuild, tombaConfigured]);
+  }, [config, runPlacesBuild, tombaConfigured, leadrocksConfigured]);
 
   const exportCsv = useCallback(() => {
     downloadCsv(
@@ -307,6 +381,7 @@ export default function Home() {
           running={running}
           error={error}
           tombaConfigured={tombaConfigured}
+          leadrocksConfigured={leadrocksConfigured}
           onChange={handleConfigChange}
           onRun={runExtraction}
         />

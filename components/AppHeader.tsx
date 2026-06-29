@@ -13,6 +13,8 @@ interface StatusResponse {
   places: boolean;
   tomba: boolean;
   tombaCredits: TombaCredits | null;
+  leadrocks: boolean;
+  leadrocksCredits: number | null;
 }
 
 function formatCredits(used: number, limit: number): string {
@@ -29,6 +31,8 @@ export function AppHeader({ refreshKey = 0 }: AppHeaderProps) {
     places: false,
     tomba: false,
     tombaCredits: null,
+    leadrocks: false,
+    leadrocksCredits: null,
   });
 
   const loadStatus = useCallback(() => {
@@ -55,7 +59,7 @@ export function AppHeader({ refreshKey = 0 }: AppHeaderProps) {
         />
         <span className="text-sm font-medium tracking-tight">Better Scraper</span>
       </div>
-      <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-muted">
+      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs text-muted">
         <span className="inline-flex items-center gap-1.5">
           <span
             className={`h-1.5 w-1.5 rounded-full ${status.places ? "bg-success" : "bg-danger"}`}
@@ -65,7 +69,7 @@ export function AppHeader({ refreshKey = 0 }: AppHeaderProps) {
         {status.tomba && status.tombaCredits ? (
           <>
             <span className="hidden sm:inline text-border">|</span>
-            <span title="Tomba Finder credits (domain search)">
+            <span title="Tomba Finder credits">
               Finder{" "}
               <span className="font-medium text-fg">
                 {formatCredits(
@@ -74,24 +78,26 @@ export function AppHeader({ refreshKey = 0 }: AppHeaderProps) {
                 )}
               </span>
             </span>
-            <span title="Tomba Verifier credits">
-              Verifier{" "}
-              <span className="font-medium text-fg">
-                {formatCredits(
-                  status.tombaCredits.verifier.used,
-                  status.tombaCredits.verifier.limit
-                )}
-              </span>
-            </span>
           </>
-        ) : (
+        ) : status.tomba ? (
           <span className="inline-flex items-center gap-1.5">
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${status.tomba ? "bg-success" : "bg-muted"}`}
-            />
+            <span className="h-1.5 w-1.5 rounded-full bg-success" />
             Tomba
           </span>
-        )}
+        ) : null}
+        {status.leadrocks && status.leadrocksCredits !== null ? (
+          <span title="LeadRocks email verification credits">
+            LeadRocks{" "}
+            <span className="font-medium text-fg">
+              {status.leadrocksCredits.toLocaleString()}
+            </span>
+          </span>
+        ) : status.leadrocks ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-success" />
+            LeadRocks
+          </span>
+        ) : null}
       </div>
     </header>
   );

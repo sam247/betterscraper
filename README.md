@@ -18,7 +18,8 @@ Internal tool to extract business leads from Google Places by region, with optio
    ```
 
    - `GOOGLE_PLACES_API_KEY` — from [Google Cloud Console](https://console.cloud.google.com/) (Places API (New) enabled).
-   - `TOMBA_API_KEY` and `TOMBA_API_SECRET` — from [Tomba](https://app.tomba.io/api) for domain email lookup (optional, recommended).
+   - `TOMBA_API_KEY` and `TOMBA_API_SECRET` — from [Tomba](https://app.tomba.io/api) for domain email lookup (optional).
+   - `LEADROCKS_API_TOKEN` — from [LeadRocks Realtime API](https://help.leadrocks.io/en/articles/8336859-email-verifier-realtime-api) for instant email verification (optional).
    - `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD`, or `BASIC_AUTH_CREDENTIALS=user:password`.
 
 3. Run locally:
@@ -44,14 +45,16 @@ Internal tool to extract business leads from Google Places by region, with optio
 
 ## Email lookup
 
-Emails are resolved per business website:
+Emails are resolved per business website (choose **Tomba** or **Website scrape** in the sidebar):
 
-1. **Tomba domain search** (if `TOMBA_API_KEY` + `TOMBA_API_SECRET` are set) — ~1 Finder credit per domain
-2. **Website scrape fallback** — parses HTML, Cloudflare-protected emails, JSON-LD
+1. **Tomba domain search** — ~1 Finder credit per domain
+2. **Website scrape** — parses HTML, Cloudflare-protected emails, JSON-LD, contact pages
 
-Enable **Only keep leads with email** to drop rows with no email after lookup.
+Optional **Verify emails with LeadRocks** (when `LEADROCKS_API_TOKEN` is set) checks each address via the [LeadRocks instant API](https://help.leadrocks.io/en/articles/8336859-email-verifier-realtime-api) (~1 credit per address) and keeps only **valid** emails.
 
-Google Places cannot filter by email upfront — Tomba runs after Places returns businesses with websites.
+Enable **Only keep leads with email** to drop rows with no email after lookup/verification.
+
+Google Places cannot filter by email upfront — email lookup runs after Places returns businesses with websites.
 
 ## Stack
 

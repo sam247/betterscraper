@@ -24,6 +24,7 @@ export interface RunConfigValues {
   scrapeEmails: boolean;
   emailSource: EmailSource;
   onlyWithEmail: boolean;
+  verifyWithLeadRocks: boolean;
   splitByArea: boolean;
   categoryId: string;
 }
@@ -33,6 +34,7 @@ interface RunConfigProps {
   running: boolean;
   error: string | null;
   tombaConfigured: boolean;
+  leadrocksConfigured: boolean;
   onChange: (patch: Partial<RunConfigValues>) => void;
   onRun: () => void;
 }
@@ -47,6 +49,7 @@ export function RunConfig({
   running,
   error,
   tombaConfigured,
+  leadrocksConfigured,
   onChange,
   onRun,
 }: RunConfigProps) {
@@ -277,6 +280,26 @@ export function RunConfig({
               className="h-4 w-4 rounded border-border accent-accent"
             />
             <span>Only keep leads with email</span>
+          </label>
+        )}
+
+        {values.scrapeEmails && (
+          <label className="flex cursor-pointer items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={values.verifyWithLeadRocks}
+              disabled={!leadrocksConfigured}
+              onChange={(e) => onChange({ verifyWithLeadRocks: e.target.checked })}
+              className="mt-0.5 h-4 w-4 rounded border-border accent-accent disabled:opacity-40"
+            />
+            <span>
+              Verify emails with LeadRocks
+              <span className="block text-[11px] text-muted">
+                {leadrocksConfigured
+                  ? "1 credit per address · keeps valid emails only"
+                  : "Add LEADROCKS_API_TOKEN in Vercel to enable"}
+              </span>
+            </span>
           </label>
         )}
 
