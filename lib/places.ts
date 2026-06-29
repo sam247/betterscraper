@@ -1,3 +1,5 @@
+import { enrichResultsWithEmails } from "./emails";
+
 const RATE_MS = 200;
 const SEARCH_TEXT_URL = "https://places.googleapis.com/v1/places:searchText";
 
@@ -11,10 +13,11 @@ const SEARCH_FIELD_MASK = [
   "places.userRatingCount",
   "places.nationalPhoneNumber",
   "places.websiteUri",
+  "places.googleMapsUri",
   "nextPageToken",
 ].join(",");
 
-export interface NormalisedClinic {
+export interface NormalisedPlace {
   country: string;
   state: string;
   city: string;
@@ -22,13 +25,18 @@ export interface NormalisedClinic {
   full_address: string;
   phone: string;
   website: string;
+  email: string;
   rating: number | null;
   total_reviews: number | null;
   lat: number;
   lng: number;
   place_id: string;
   source_query: string;
+  maps_url: string;
 }
+
+/** @deprecated Use NormalisedPlace */
+export type NormalisedClinic = NormalisedPlace;
 
 export interface BuildInput {
   country: string;
@@ -36,13 +44,15 @@ export interface BuildInput {
   city?: string;
   searchTerms: string[];
   maxResults: number;
+  scrapeEmails?: boolean;
 }
 
 export interface BuildResult {
   log: string[];
-  results: NormalisedClinic[];
+  results: NormalisedPlace[];
   totalResults: number;
   dedupedCount: number;
+  emailsFound: number;
 }
 
 interface AddressComponent {
@@ -61,6 +71,7 @@ interface PlaceResult {
   userRatingCount?: number;
   nationalPhoneNumber?: string;
   websiteUri?: string;
+  googleMapsUri?: string;
 }
 
 interface SearchTextResponse {
@@ -120,12 +131,12 @@ export async function runExtraction(
 ): Promise<BuildResult> {
   const log: string[] = [];
   const seenIds = new Map<string, string>();
-  const results: NormalisedClinic[] = [];
+  const results: NormalisedPlace[] = [];
   let totalRawFromSearch = 0;
 
   if (!apiKey?.trim()) {
     log.push("Error: GOOGLE_PLACES_API_KEY is not set.");
-    return { log, results: [], totalResults: 0, dedupedCount: 0 };
+    return { log, results: [], totalResults: 0, dedupedCount: 0, emailsFound: 0 };
   }
 
   const maxResults = Math.min(Math.max(1, input.maxResults || 60), 60);
@@ -160,6 +171,8 @@ export async function runExtraction(
         const city = getComponent(ac, "locality") || getComponent(ac, "administrative_area_level_2") || "";
         const state = getComponent(ac, "administrative_area_level_1") || defaultState;
         const country = getComponent(ac, "country") || defaultCountry;
+        const lat = p.location?.latitude ?? 0;
+        const lng = p.location?.longitude ?? 0;
 
         results.push({
           country,
@@ -169,12 +182,16 @@ export async function runExtraction(
           full_address: p.formattedAddress ?? "",
           phone: p.nationalPhoneNumber ?? "",
           website: p.websiteUri ?? "",
+          email: "",
           rating: p.rating ?? null,
           total_reviews: p.userRatingCount ?? null,
-          lat: p.location?.latitude ?? 0,
-          lng: p.location?.longitude ?? 0,
+          lat,
+          lng,
           place_id: p.id,
           source_query: term,
+          maps_url:
+            p.googleMapsUri ??
+            (lat && lng ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}` : ""),
         });
       }
 
@@ -191,12 +208,29 @@ export async function runExtraction(
     }
   }
 
-  log.push(`Total results from search: ${totalRawFromSearch}. Deduplicated: ${results.length}. Done.`);
+  log.push(
+    `Places search complete: ${totalRawFromSearch} raw, ${results.length} unique.`
+  );
+
+  let finalResults = results;
+  let emailsFound = 0;
+
+  if (input.scrapeEmails && results.length > 0) {
+    finalResults = await enrichResultsWithEmails(results, {
+      onProgress: (msg) => log.push(msg),
+      concurrency: 4,
+    });
+    emailsFound = finalResults.filter((r) => r.email?.trim()).length;
+    log.push(`Emails found for ${emailsFound} of ${results.length} places.`);
+  }
+
+  log.push("Done.");
 
   return {
     log,
-    results,
+    results: finalResults,
     totalResults: totalRawFromSearch,
-    dedupedCount: results.length,
+    dedupedCount: finalResults.length,
+    emailsFound,
   };
 }

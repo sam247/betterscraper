@@ -1,40 +1,52 @@
 # Better Scraper
 
-Internal tool to extract head lice clinic data from Google Places API by state and optional city. Private; deploy to Vercel with basic auth.
+Internal tool to extract business leads from Google Places by region, with optional email scraping from business websites. Deploy to Vercel with basic auth.
 
 ## Setup
 
 1. Clone and install:
+
    ```bash
    cd betterscraper
    npm install
    ```
 
 2. Copy env and set variables:
+
    ```bash
    cp .env.example .env
    ```
-   Edit `.env`:
-   - `GOOGLE_PLACES_API_KEY` – from [Google Cloud Console](https://console.cloud.google.com/) (Places API (New) enabled).
+
+   - `GOOGLE_PLACES_API_KEY` — from [Google Cloud Console](https://console.cloud.google.com/) (Places API (New) enabled).
    - `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD`, or `BASIC_AUTH_CREDENTIALS=user:password`.
 
 3. Run locally:
+
    ```bash
    npm run dev
    ```
-   Open [http://localhost:3000](http://localhost:3000) and sign in with the basic auth credentials.
+
+   Open [http://localhost:3000](http://localhost:3000).
 
 ## Deploy to Vercel
 
 1. Push to GitHub and import the repo in Vercel.
-2. Add environment variables in Vercel: `GOOGLE_PLACES_API_KEY`, and either `BASIC_AUTH_USER` + `BASIC_AUTH_PASSWORD` or `BASIC_AUTH_CREDENTIALS`.
-3. Deploy. The app is protected by basic auth.
+2. Add environment variables: `GOOGLE_PLACES_API_KEY`, and basic auth credentials.
+3. Deploy. The app is protected by basic auth when credentials are set.
 
 ## Usage
 
-- **Country**: Default “United States”.
-- **State**: Required (e.g. Texas).
-- **City**: Optional (e.g. Austin).
-- **Search terms**: One per line; defaults include “head lice clinic”, “lice removal”, etc.
-- **Max results per term**: Default 60 (capped by API).
-- Click **Run Extraction**, then use **Export CSV** to download the last run.
+- Choose a **preset** or enter custom **search terms** (one per line).
+- Set **country**, **state** (required), and optional **city**.
+- Enable **Scrape emails from websites** to fetch contact emails from each business website (homepage + common contact pages).
+- Click **Run extraction**, then **Export CSV** for the full dataset including emails.
+
+## Email scraping
+
+Emails are extracted by fetching each business website and parsing HTML for `mailto:` links and email patterns. Common contact paths (`/contact`, `/about`, etc.) are checked. Junk addresses (noreply, example.com, etc.) are filtered out.
+
+## Stack
+
+- Next.js 14 · React 18 · Tailwind CSS · Geist font
+- Google Places API (New) text search
+- Client-side CSV export (no server-side session state)
