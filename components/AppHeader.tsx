@@ -1,10 +1,17 @@
+import Image from "next/image";
+
 export function AppHeader() {
   return (
     <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4 lg:px-6">
       <div className="flex items-center gap-3">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-elevated text-xs font-semibold">
-          BS
-        </div>
+        <Image
+          src="/logo.png"
+          alt="Better Scraper"
+          width={28}
+          height={28}
+          className="h-7 w-7 rounded-md object-contain"
+          priority
+        />
         <span className="text-sm font-medium tracking-tight">Better Scraper</span>
       </div>
       <div className="flex items-center gap-4 text-xs text-muted">

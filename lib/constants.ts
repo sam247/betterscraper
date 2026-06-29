@@ -20,28 +20,3 @@ export const RESULT_COLUMNS: {
   { key: "lng", label: "Lng" },
   { key: "place_id", label: "Place ID", wide: true },
 ];
-
-export const SEARCH_PRESETS: { id: string; label: string; terms: string }[] = [
-  {
-    id: "lice",
-    label: "Lice clinics",
-    terms: `head lice clinic\nlice removal\nnit removal\nlice treatment`,
-  },
-  {
-    id: "plumbers",
-    label: "Plumbers",
-    terms: `plumber\nemergency plumber\ndrain cleaning\nboiler repair`,
-  },
-  {
-    id: "dentists",
-    label: "Dentists",
-    terms: `dentist\ndental clinic\ncosmetic dentist\nemergency dentist`,
-  },
-  {
-    id: "groundworks",
-    label: "Groundworks",
-    terms: `groundworks contractor\nexcavation\nbulk excavation\ncivil engineering`,
-  },
-];
-
-export const DEFAULT_PRESET_ID = "lice";

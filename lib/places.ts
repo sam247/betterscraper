@@ -43,6 +43,7 @@ export interface BuildInput {
   state: string;
   city?: string;
   searchTerms: string[];
+  includedTypes?: (string | undefined)[];
   maxResults: number;
   scrapeEmails?: boolean;
 }
@@ -97,10 +98,12 @@ function buildQuery(term: string, state: string, country: string, city?: string)
 async function textSearchPage(
   apiKey: string,
   textQuery: string,
-  pageToken?: string
+  pageToken?: string,
+  includedType?: string
 ): Promise<SearchTextResponse> {
   const body: Record<string, unknown> = { textQuery, pageSize: 20 };
   if (pageToken) body.pageToken = pageToken;
+  if (includedType) body.includedType = includedType;
 
   const res = await fetch(SEARCH_TEXT_URL, {
     method: "POST",
@@ -140,19 +143,21 @@ export async function runExtraction(
   }
 
   const maxResults = Math.min(Math.max(1, input.maxResults || 60), 60);
-  const defaultCountry = input.country?.trim() || "United States";
+  const defaultCountry = input.country?.trim() || "United Kingdom";
   const defaultState = input.state?.trim() || "";
 
-  for (const term of input.searchTerms) {
+  for (let termIndex = 0; termIndex < input.searchTerms.length; termIndex++) {
+    const term = input.searchTerms[termIndex];
+    const includedType = input.includedTypes?.[termIndex];
     const query = buildQuery(term.trim(), defaultState, defaultCountry, input.city?.trim());
-    log.push(`[${term}] Query: ${query}`);
+    log.push(`[${term}] Query: ${query}${includedType ? ` (type: ${includedType})` : ""}`);
 
     let totalForTerm = 0;
     let nextPageToken: string | undefined;
 
     do {
       await sleep(RATE_MS);
-      const resp = await textSearchPage(apiKey, query, nextPageToken);
+      const resp = await textSearchPage(apiKey, query, nextPageToken, includedType);
 
       if (resp.error) {
         log.push(`[${term}] API error: ${resp.error.status || ""} ${resp.error.message || ""}`);

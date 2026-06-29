@@ -6,20 +6,24 @@ import { ExtractionLog } from "@/components/ExtractionLog";
 import { ResultsTable } from "@/components/ResultsTable";
 import { RunConfig, type RunConfigValues } from "@/components/RunConfig";
 import { StatsBar } from "@/components/StatsBar";
-import { DEFAULT_PRESET_ID, SEARCH_PRESETS } from "@/lib/constants";
+import { DEFAULT_COUNTRY } from "@/lib/countries";
 import { downloadCsv } from "@/lib/csv";
+import {
+  DEFAULT_CATEGORY_ID,
+  getPlaceCategory,
+} from "@/lib/place-categories";
 import type { NormalisedPlace } from "@/lib/places";
 
-const defaultPreset = SEARCH_PRESETS.find((p) => p.id === DEFAULT_PRESET_ID)!;
+const defaultCategory = getPlaceCategory(DEFAULT_CATEGORY_ID)!;
 
 const initialConfig: RunConfigValues = {
-  country: "United States",
+  country: DEFAULT_COUNTRY,
   state: "",
   city: "",
-  searchTerms: defaultPreset.terms,
+  searchTerms: defaultCategory.label,
   maxResults: 60,
   scrapeEmails: true,
-  presetId: DEFAULT_PRESET_ID,
+  categoryId: DEFAULT_CATEGORY_ID,
 };
 
 export default function Home() {
@@ -75,15 +79,26 @@ export default function Home() {
       return;
     }
 
+    const category =
+      config.categoryId !== "custom"
+        ? getPlaceCategory(config.categoryId)
+        : undefined;
+
+    const includedTypes =
+      category && terms.length === 1 && terms[0] === category.label
+        ? [category.id]
+        : undefined;
+
     try {
       const res = await fetch("/api/build", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          country: config.country.trim() || "United States",
+          country: config.country.trim() || DEFAULT_COUNTRY,
           state: config.state.trim(),
           city: config.city.trim() || undefined,
           searchTerms: terms,
+          includedTypes,
           maxResults: Number(config.maxResults) || 60,
           scrapeEmails: config.scrapeEmails,
         }),
@@ -109,7 +124,7 @@ export default function Home() {
   const exportCsv = useCallback(() => {
     downloadCsv(
       results,
-      config.country.trim() || "United States",
+      config.country.trim() || DEFAULT_COUNTRY,
       config.state.trim(),
       config.city.trim() || undefined
     );

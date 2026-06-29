@@ -1,6 +1,11 @@
 "use client";
 
-import { SEARCH_PRESETS } from "@/lib/constants";
+import { COUNTRIES } from "@/lib/countries";
+import {
+  ALL_PLACE_CATEGORIES,
+  getPlaceCategory,
+  PLACE_CATEGORY_GROUPS,
+} from "@/lib/place-categories";
 
 export interface RunConfigValues {
   country: string;
@@ -9,7 +14,7 @@ export interface RunConfigValues {
   searchTerms: string;
   maxResults: number;
   scrapeEmails: boolean;
-  presetId: string;
+  categoryId: string;
 }
 
 interface RunConfigProps {
@@ -48,43 +53,58 @@ export function RunConfig({
         )}
 
         <div>
-          <label className={labelClass} htmlFor="preset">
-            Preset
+          <label className={labelClass} htmlFor="category">
+            Category
           </label>
           <select
-            id="preset"
+            id="category"
             className={inputClass}
-            value={values.presetId}
+            value={values.categoryId}
             onChange={(e) => {
-              const preset = SEARCH_PRESETS.find((p) => p.id === e.target.value);
+              const id = e.target.value;
+              if (id === "custom") {
+                onChange({ categoryId: "custom" });
+                return;
+              }
+              const category = getPlaceCategory(id);
               onChange({
-                presetId: e.target.value,
-                ...(preset ? { searchTerms: preset.terms } : {}),
+                categoryId: id,
+                ...(category ? { searchTerms: category.label } : {}),
               });
             }}
           >
-            {values.presetId === "custom" && (
-              <option value="custom">Custom</option>
-            )}
-            {SEARCH_PRESETS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
+            <option value="custom">Custom search terms</option>
+            {PLACE_CATEGORY_GROUPS.map((group) => (
+              <optgroup key={group.group} label={group.group}>
+                {group.categories.map((cat) => (
+                  <option key={cat.id} value={cat.id}>
+                    {cat.label}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
+          <p className="mt-1 text-[11px] text-muted">
+            {ALL_PLACE_CATEGORIES.length} Google Maps categories
+          </p>
         </div>
 
         <div>
           <label className={labelClass} htmlFor="country">
             Country
           </label>
-          <input
+          <select
             id="country"
             className={inputClass}
             value={values.country}
             onChange={(e) => onChange({ country: e.target.value })}
-            placeholder="United States"
-          />
+          >
+            {COUNTRIES.map((c) => (
+              <option key={c.code} value={c.name}>
+                {c.name}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div>
@@ -96,7 +116,7 @@ export function RunConfig({
             className={inputClass}
             value={values.state}
             onChange={(e) => onChange({ state: e.target.value })}
-            placeholder="Texas, England…"
+            placeholder="England, Texas…"
           />
         </div>
 
@@ -109,19 +129,25 @@ export function RunConfig({
             className={inputClass}
             value={values.city}
             onChange={(e) => onChange({ city: e.target.value })}
-            placeholder="Austin"
+            placeholder="London, Austin…"
           />
         </div>
 
         <div>
           <label className={labelClass} htmlFor="terms">
-            Search terms <span className="text-muted/70">(one per line)</span>
+            Search terms{" "}
+            <span className="text-muted/70">
+              {values.categoryId === "custom" ? "(one per line)" : "(from category)"}
+            </span>
           </label>
           <textarea
             id="terms"
             className={`${inputClass} min-h-[100px] resize-y`}
             value={values.searchTerms}
-            onChange={(e) => onChange({ searchTerms: e.target.value, presetId: "custom" })}
+            readOnly={values.categoryId !== "custom"}
+            onChange={(e) =>
+              onChange({ searchTerms: e.target.value, categoryId: "custom" })
+            }
           />
         </div>
 

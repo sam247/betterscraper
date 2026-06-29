@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { DEFAULT_COUNTRY } from "@/lib/countries";
 import { runExtraction } from "@/lib/places";
 
 export const maxDuration = 300;
@@ -9,6 +10,7 @@ export async function POST(req: Request) {
     state?: string;
     city?: string;
     searchTerms?: string[];
+    includedTypes?: (string | undefined)[];
     maxResults?: number;
     scrapeEmails?: boolean;
   };
@@ -45,10 +47,11 @@ export async function POST(req: Request) {
   }
 
   const input = {
-    country: typeof body.country === "string" ? body.country : "United States",
+    country: typeof body.country === "string" ? body.country : DEFAULT_COUNTRY,
     state,
     city: typeof body.city === "string" ? body.city : undefined,
     searchTerms,
+    includedTypes: Array.isArray(body.includedTypes) ? body.includedTypes : undefined,
     maxResults:
       typeof body.maxResults === "number" && body.maxResults > 0
         ? body.maxResults

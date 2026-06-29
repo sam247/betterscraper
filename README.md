@@ -36,7 +36,7 @@ Internal tool to extract business leads from Google Places by region, with optio
 
 ## Usage
 
-- Choose a **preset** or enter custom **search terms** (one per line).
+- Choose a **category** from the Google Maps types dropdown, or switch to **Custom search terms**.
 - Set **country**, **state** (required), and optional **city**.
 - Enable **Scrape emails from websites** to fetch contact emails from each business website (homepage + common contact pages).
 - Click **Run extraction**, then **Export CSV** for the full dataset including emails.
