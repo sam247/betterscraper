@@ -1,11 +1,31 @@
-const FETCH_TIMEOUT_MS = 8000;
-const MAX_HTML_BYTES = 512_000;
-const CONTACT_PATHS = ["", "/contact", "/contact-us", "/about", "/about-us"];
+const FETCH_TIMEOUT_MS = 10_000;
+const MAX_HTML_BYTES = 768_000;
+const PAGE_TOKEN_DELAY_MS = 2_000;
+
+const STATIC_PATHS = [
+  "",
+  "/contact",
+  "/contact-us",
+  "/contactus",
+  "/get-in-touch",
+  "/enquiries",
+  "/enquiry",
+  "/about",
+  "/about-us",
+  "/team",
+  "/our-team",
+];
 
 const EMAIL_REGEX =
   /[a-zA-Z0-9](?:[a-zA-Z0-9._%+-]{0,62}[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z]{2,})+/g;
 
 const MAILTO_REGEX = /mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
+
+const CF_EMAIL_HASH_REGEX =
+  /\/cdn-cgi\/l\/email-protection#([a-f0-9]+)|data-cfemail=["']([a-f0-9]+)["']/gi;
+
+const CONTACT_LINK_REGEX =
+  /href=["']([^"']*(?:contact|enquir|get-in-touch|about|team)[^"']*)["']/gi;
 
 const JUNK_EMAIL_PATTERNS = [
   /noreply/i,
@@ -18,6 +38,7 @@ const JUNK_EMAIL_PATTERNS = [
   /wordpress\.com$/i,
   /cloudflare/i,
   /github\.com$/i,
+  /schema\.org$/i,
   /\.png$/i,
   /\.jpg$/i,
   /\.gif$/i,
@@ -28,12 +49,15 @@ const JUNK_EMAIL_PATTERNS = [
   /user@/i,
   /test@/i,
   /sample@/i,
+  /@sentry\./i,
+  /wix\.com$/i,
 ];
 
 const FETCH_HEADERS = {
   "User-Agent":
-    "Mozilla/5.0 (compatible; BetterScraper/1.0; +https://betterscraper.vercel.app)",
-  Accept: "text/html,application/xhtml+xml",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Accept-Language": "en-GB,en;q=0.9",
 };
 
 function sleep(ms: number): Promise<void> {
@@ -58,24 +82,98 @@ function normalizeEmail(raw: string): string | null {
   return email;
 }
 
-export function extractEmailsFromHtml(html: string): string[] {
-  const found = new Set<string>();
+function decodeCloudflareEmail(hex: string): string | null {
+  if (!hex || hex.length < 4 || hex.length % 2 !== 0) return null;
+  const key = parseInt(hex.slice(0, 2), 16);
+  if (Number.isNaN(key)) return null;
+  let out = "";
+  for (let i = 2; i < hex.length; i += 2) {
+    const code = parseInt(hex.slice(i, i + 2), 16);
+    if (Number.isNaN(code)) return null;
+    out += String.fromCharCode(code ^ key);
+  }
+  return normalizeEmail(out);
+}
+
+function deobfuscateText(text: string): string {
+  return text
+    .replace(/&#0*64;/g, "@")
+    .replace(/&#x40;/gi, "@")
+    .replace(/\[at\]/gi, "@")
+    .replace(/\(at\)/gi, "@")
+    .replace(/\s+at\s+/gi, "@")
+    .replace(/\[dot\]/gi, ".")
+    .replace(/\(dot\)/gi, ".")
+    .replace(/\s+dot\s+/gi, ".");
+}
+
+function addEmailsFromText(text: string, found: Set<string>): void {
+  const normalized = deobfuscateText(text);
+
+  let cfMatch: RegExpExecArray | null;
+  const cfRe = new RegExp(CF_EMAIL_HASH_REGEX.source, CF_EMAIL_HASH_REGEX.flags);
+  while ((cfMatch = cfRe.exec(normalized)) !== null) {
+    const hash = cfMatch[1] || cfMatch[2];
+    if (hash) {
+      const email = decodeCloudflareEmail(hash);
+      if (email) found.add(email);
+    }
+  }
 
   let mailtoMatch: RegExpExecArray | null;
   const mailtoRe = new RegExp(MAILTO_REGEX.source, MAILTO_REGEX.flags);
-  while ((mailtoMatch = mailtoRe.exec(html)) !== null) {
+  while ((mailtoMatch = mailtoRe.exec(normalized)) !== null) {
     const email = normalizeEmail(mailtoMatch[1]);
     if (email) found.add(email);
   }
 
   let emailMatch: RegExpExecArray | null;
   const emailRe = new RegExp(EMAIL_REGEX.source, EMAIL_REGEX.flags);
-  while ((emailMatch = emailRe.exec(html)) !== null) {
+  while ((emailMatch = emailRe.exec(normalized)) !== null) {
     const email = normalizeEmail(emailMatch[0]);
     if (email) found.add(email);
   }
+}
 
-  return [...found];
+function extractEmailsFromJsonLd(html: string, found: Set<string>): void {
+  const scriptRe =
+    /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = scriptRe.exec(html)) !== null) {
+    try {
+      const data = JSON.parse(match[1]);
+      walkJsonLd(data, found);
+    } catch {
+      // ignore invalid JSON-LD
+    }
+  }
+}
+
+function walkJsonLd(node: unknown, found: Set<string>): void {
+  if (!node) return;
+  if (Array.isArray(node)) {
+    for (const item of node) walkJsonLd(item, found);
+    return;
+  }
+  if (typeof node !== "object") return;
+
+  const obj = node as Record<string, unknown>;
+  if (typeof obj.email === "string") {
+    const email = normalizeEmail(obj.email);
+    if (email) found.add(email);
+  }
+
+  for (const value of Object.values(obj)) {
+    if (value && typeof value === "object") walkJsonLd(value, found);
+  }
+}
+
+export function extractEmailsFromHtml(html: string): string[] {
+  const found = new Set<string>();
+  addEmailsFromText(html, found);
+  extractEmailsFromJsonLd(html, found);
+  return Array.from(found);
 }
 
 function resolveUrl(base: string, path: string): string {
@@ -84,6 +182,25 @@ function resolveUrl(base: string, path: string): string {
   } catch {
     return base;
   }
+}
+
+function discoverContactUrls(baseUrl: string, html: string): string[] {
+  const urls = new Set<string>();
+  let match: RegExpExecArray | null;
+  const re = new RegExp(CONTACT_LINK_REGEX.source, CONTACT_LINK_REGEX.flags);
+
+  while ((match = re.exec(html)) !== null) {
+    try {
+      const href = match[1];
+      if (!href || href.startsWith("#") || href.startsWith("javascript:")) continue;
+      const resolved = new URL(href, baseUrl).href;
+      if (resolved.startsWith("http")) urls.add(resolved);
+    } catch {
+      // skip bad URLs
+    }
+  }
+
+  return Array.from(urls).slice(0, 4);
 }
 
 async function fetchHtml(url: string): Promise<string | null> {
@@ -99,7 +216,11 @@ async function fetchHtml(url: string): Promise<string | null> {
     if (!res.ok) return null;
 
     const contentType = res.headers.get("content-type") || "";
-    if (!contentType.includes("text/html") && !contentType.includes("text/plain")) {
+    if (
+      !contentType.includes("text/html") &&
+      !contentType.includes("text/plain") &&
+      !contentType.includes("application/xhtml")
+    ) {
       return null;
     }
 
@@ -118,14 +239,14 @@ async function fetchHtml(url: string): Promise<string | null> {
     }
 
     const decoder = new TextDecoder("utf-8", { fatal: false });
-    return decoder.decode(
-      chunks.reduce((acc, chunk) => {
-        const merged = new Uint8Array(acc.length + chunk.length);
-        merged.set(acc);
-        merged.set(chunk, acc.length);
-        return merged;
-      }, new Uint8Array())
-    );
+    const combined = chunks.reduce((acc, chunk) => {
+      const merged = new Uint8Array(acc.length + chunk.length);
+      merged.set(acc);
+      merged.set(chunk, acc.length);
+      return merged;
+    }, new Uint8Array());
+
+    return decoder.decode(combined);
   } catch {
     return null;
   } finally {
@@ -144,9 +265,18 @@ export async function scrapeEmailsFromWebsite(website: string): Promise<string[]
   }
 
   const emails = new Set<string>();
+  const visited = new Set<string>();
+  const queue: string[] = [];
 
-  for (const path of CONTACT_PATHS) {
-    const url = resolveUrl(baseUrl, path);
+  for (const path of STATIC_PATHS) {
+    queue.push(resolveUrl(baseUrl, path));
+  }
+
+  while (queue.length > 0 && visited.size < 8) {
+    const url = queue.shift()!;
+    if (visited.has(url)) continue;
+    visited.add(url);
+
     const html = await fetchHtml(url);
     if (!html) continue;
 
@@ -155,10 +285,17 @@ export async function scrapeEmailsFromWebsite(website: string): Promise<string[]
     }
 
     if (emails.size >= 3) break;
-    await sleep(150);
+
+    if (visited.size === 1) {
+      for (const contactUrl of discoverContactUrls(baseUrl, html)) {
+        if (!visited.has(contactUrl)) queue.push(contactUrl);
+      }
+    }
+
+    await sleep(100);
   }
 
-  return [...emails].slice(0, 3);
+  return Array.from(emails).slice(0, 3);
 }
 
 export async function enrichResultsWithEmails<
@@ -168,14 +305,15 @@ export async function enrichResultsWithEmails<
   options: {
     onProgress?: (message: string) => void;
     concurrency?: number;
+    onlyWithEmail?: boolean;
   } = {}
 ): Promise<T[]> {
-  const { onProgress, concurrency = 4 } = options;
+  const { onProgress, concurrency = 4, onlyWithEmail = false } = options;
   const withWebsites = results.filter((r) => r.website?.trim()).length;
 
   if (withWebsites === 0) {
     onProgress?.("No websites to scrape for emails.");
-    return results.map((r) => ({ ...r, email: r.email ?? "" }));
+    return onlyWithEmail ? [] : results.map((r) => ({ ...r, email: r.email ?? "" }));
   }
 
   onProgress?.(`Scraping emails from ${withWebsites} websites…`);
@@ -209,5 +347,12 @@ export async function enrichResultsWithEmails<
 
   onProgress?.(`Email scrape complete: ${emailsFound}/${withWebsites} with emails.`);
 
-  return enriched;
+  let finalResults = enriched;
+  if (onlyWithEmail) {
+    const before = finalResults.length;
+    finalResults = finalResults.filter((r) => r.email?.trim());
+    onProgress?.(`Kept ${finalResults.length} of ${before} leads with email.`);
+  }
+
+  return finalResults;
 }

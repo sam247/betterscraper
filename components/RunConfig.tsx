@@ -2,6 +2,12 @@
 
 import { COUNTRIES } from "@/lib/countries";
 import {
+  describeAreaSplit,
+  isLondonRegion,
+  resolveAreaSplits,
+} from "@/lib/area-splits";
+import { PLACES_MAX_PER_TERM } from "@/lib/places";
+import {
   ALL_PLACE_CATEGORIES,
   getPlaceCategory,
   PLACE_CATEGORY_GROUPS,
@@ -14,6 +20,8 @@ export interface RunConfigValues {
   searchTerms: string;
   maxResults: number;
   scrapeEmails: boolean;
+  onlyWithEmail: boolean;
+  splitByArea: boolean;
   categoryId: string;
 }
 
@@ -37,6 +45,9 @@ export function RunConfig({
   onChange,
   onRun,
 }: RunConfigProps) {
+  const areaSplits = resolveAreaSplits(values.country, values.state, values.city);
+  const canSplit = areaSplits !== null;
+
   return (
     <aside className="flex w-full shrink-0 flex-col border-b border-border bg-surface lg:w-80 lg:border-b-0 lg:border-r">
       <div className="border-b border-border px-4 py-3">
@@ -73,7 +84,7 @@ export function RunConfig({
               });
             }}
           >
-            <option value="custom">Custom search terms</option>
+            <option value="custom">Custom (manual terms only)</option>
             {PLACE_CATEGORY_GROUPS.map((group) => (
               <optgroup key={group.group} label={group.group}>
                 {group.categories.map((cat) => (
@@ -135,20 +146,33 @@ export function RunConfig({
 
         <div>
           <label className={labelClass} htmlFor="terms">
-            Search terms{" "}
-            <span className="text-muted/70">
-              {values.categoryId === "custom" ? "(one per line)" : "(from category)"}
-            </span>
+            Search terms <span className="text-muted/70">(one per line)</span>
           </label>
           <textarea
             id="terms"
             className={`${inputClass} min-h-[100px] resize-y`}
             value={values.searchTerms}
-            readOnly={values.categoryId !== "custom"}
-            onChange={(e) =>
-              onChange({ searchTerms: e.target.value, categoryId: "custom" })
-            }
+            placeholder={"Real estate agency\nLetting agent\nProperty management"}
+            onChange={(e) => {
+              const next = e.target.value;
+              const patch: Partial<RunConfigValues> = { searchTerms: next };
+              if (values.categoryId !== "custom") {
+                const category = getPlaceCategory(values.categoryId);
+                const firstLine =
+                  next
+                    .split("\n")
+                    .map((t) => t.trim())
+                    .find(Boolean) ?? "";
+                if (category && firstLine !== category.label) {
+                  patch.categoryId = "custom";
+                }
+              }
+              onChange(patch);
+            }}
           />
+          <p className="mt-1 text-[11px] text-muted">
+            Pick a category to pre-fill, then add extra terms on new lines.
+          </p>
         </div>
 
         <div>
@@ -159,11 +183,27 @@ export function RunConfig({
             id="maxResults"
             type="number"
             min={1}
-            max={60}
+            max={PLACES_MAX_PER_TERM}
             className={inputClass}
             value={values.maxResults}
-            onChange={(e) => onChange({ maxResults: Number(e.target.value) || 60 })}
+            onChange={(e) => {
+              const raw = e.target.value;
+              if (raw === "") {
+                onChange({ maxResults: PLACES_MAX_PER_TERM });
+                return;
+              }
+              const n = Number(raw);
+              if (Number.isNaN(n)) return;
+              onChange({
+                maxResults: Math.min(PLACES_MAX_PER_TERM, Math.max(1, Math.round(n))),
+              });
+            }}
           />
+          <p className="mt-1 text-[11px] text-muted">
+            Hard cap {PLACES_MAX_PER_TERM} per term (Google Places API). Use multiple
+            search terms to collect more — e.g. 3 terms ≈ up to {PLACES_MAX_PER_TERM * 3}{" "}
+            unique leads before deduping.
+          </p>
         </div>
 
         <label className="flex cursor-pointer items-center gap-2 text-sm">
@@ -175,6 +215,45 @@ export function RunConfig({
           />
           <span>Scrape emails from websites</span>
         </label>
+
+        {values.scrapeEmails && (
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={values.onlyWithEmail}
+              onChange={(e) => onChange({ onlyWithEmail: e.target.checked })}
+              className="h-4 w-4 rounded border-border accent-accent"
+            />
+            <span>Only keep leads with email</span>
+          </label>
+        )}
+
+        {canSplit && (
+          <label className="flex cursor-pointer items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={values.splitByArea}
+              onChange={(e) => onChange({ splitByArea: e.target.checked })}
+              className="mt-0.5 h-4 w-4 rounded border-border accent-accent"
+            />
+            <span>
+              Split by borough{" "}
+              <span className="block text-[11px] text-muted">
+                {isLondonRegion(values.state, values.city)
+                  ? describeAreaSplit(areaSplits!)
+                  : "Search sub-areas to beat the 60-result cap"}
+              </span>
+            </span>
+          </label>
+        )}
+
+        {values.scrapeEmails && (
+          <p className="text-[11px] text-muted">
+            Google Places has no email field — we scrape websites after search. Many
+            agencies use contact forms only; splitting areas + extra terms improves
+            coverage.
+          </p>
+        )}
       </div>
 
       <div className="border-t border-border p-4">

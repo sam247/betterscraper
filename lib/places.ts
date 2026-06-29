@@ -1,5 +1,9 @@
 const RATE_MS = 200;
 const PLACES_FETCH_TIMEOUT_MS = 25_000;
+/** Google Text Search returns at most 3 pages × 20 results per query. */
+export const PLACES_MAX_PER_TERM = 60;
+/** Google requires a short wait before nextPageToken is valid. */
+const PAGE_TOKEN_DELAY_MS = 2_000;
 const SEARCH_TEXT_URL = "https://places.googleapis.com/v1/places:searchText";
 
 const SEARCH_FIELD_MASK = [
@@ -157,7 +161,10 @@ export async function runPlacesSearch(
     return { log, results: [], totalResults: 0, dedupedCount: 0 };
   }
 
-  const maxResults = Math.min(Math.max(1, input.maxResults || 60), 60);
+  const maxResults = Math.min(
+    Math.max(1, input.maxResults || PLACES_MAX_PER_TERM),
+    PLACES_MAX_PER_TERM
+  );
   const defaultCountry = input.country?.trim() || "United Kingdom";
   const defaultState = input.state?.trim() || "";
 
@@ -234,6 +241,8 @@ export async function runPlacesSearch(
       nextPageToken = resp.nextPageToken;
       if (!nextPageToken || totalForTerm >= maxResults) {
         nextPageToken = undefined;
+      } else {
+        await sleep(PAGE_TOKEN_DELAY_MS);
       }
     } while (nextPageToken);
 

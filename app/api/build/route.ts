@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { DEFAULT_COUNTRY } from "@/lib/countries";
-import { runPlacesSearch } from "@/lib/places";
+import { PLACES_MAX_PER_TERM, runPlacesSearch } from "@/lib/places";
 
 export const maxDuration = 60;
 
@@ -52,8 +52,8 @@ export async function POST(req: Request) {
       searchTerms,
       maxResults:
         typeof body.maxResults === "number" && body.maxResults > 0
-          ? body.maxResults
-          : 60,
+          ? Math.min(PLACES_MAX_PER_TERM, Math.round(body.maxResults))
+          : PLACES_MAX_PER_TERM,
     },
     apiKey
   );

@@ -7,15 +7,17 @@ import { ResultsTable } from "@/components/ResultsTable";
 import { RunConfig, type RunConfigValues } from "@/components/RunConfig";
 import { StatsBar } from "@/components/StatsBar";
 import { readApiJson } from "@/lib/api-client";
+import { resolveAreaSplits } from "@/lib/area-splits";
 import { DEFAULT_COUNTRY } from "@/lib/countries";
 import { downloadCsv } from "@/lib/csv";
 import {
   DEFAULT_CATEGORY_ID,
   getPlaceCategory,
 } from "@/lib/place-categories";
-import type { NormalisedPlace } from "@/lib/places";
+import { PLACES_MAX_PER_TERM, type NormalisedPlace } from "@/lib/places";
 
 const defaultCategory = getPlaceCategory(DEFAULT_CATEGORY_ID)!;
+const EMAIL_BATCH_SIZE = 40;
 
 const initialConfig: RunConfigValues = {
   country: DEFAULT_COUNTRY,
@@ -24,6 +26,8 @@ const initialConfig: RunConfigValues = {
   searchTerms: defaultCategory.label,
   maxResults: 60,
   scrapeEmails: true,
+  onlyWithEmail: false,
+  splitByArea: true,
   categoryId: DEFAULT_CATEGORY_ID,
 };
 
@@ -32,6 +36,7 @@ interface BuildResponse {
   results: NormalisedPlace[];
   totalResults: number;
   dedupedCount: number;
+  error?: string;
 }
 
 interface EmailsResponse {
@@ -39,6 +44,20 @@ interface EmailsResponse {
   results: NormalisedPlace[];
   emailsFound: number;
   error?: string;
+}
+
+function mergePlaces(
+  target: Map<string, NormalisedPlace>,
+  incoming: NormalisedPlace[]
+): number {
+  let added = 0;
+  for (const place of incoming) {
+    if (!target.has(place.place_id)) {
+      target.set(place.place_id, place);
+      added += 1;
+    }
+  }
+  return added;
 }
 
 export default function Home() {
@@ -69,6 +88,37 @@ export default function Home() {
     setConfig((prev) => ({ ...prev, ...patch }));
   }, []);
 
+  const runPlacesBuild = useCallback(
+    async (cityOverride?: string) => {
+      const terms = config.searchTerms
+        .split("\n")
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+      const res = await fetch("/api/build", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          country: config.country.trim() || DEFAULT_COUNTRY,
+          state: config.state.trim(),
+          city: cityOverride ?? (config.city.trim() || undefined),
+          searchTerms: terms,
+          maxResults: Math.min(
+            PLACES_MAX_PER_TERM,
+            Number(config.maxResults) || PLACES_MAX_PER_TERM
+          ),
+        }),
+      });
+
+      const data = await readApiJson<BuildResponse>(res);
+      if (!res.ok) {
+        throw new Error(data.error || "Places search failed.");
+      }
+      return data;
+    },
+    [config]
+  );
+
   const runExtraction = useCallback(async () => {
     setRunning(true);
     setError(null);
@@ -94,67 +144,118 @@ export default function Home() {
       return;
     }
 
-    try {
-      const buildRes = await fetch("/api/build", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          country: config.country.trim() || DEFAULT_COUNTRY,
-          state: config.state.trim(),
-          city: config.city.trim() || undefined,
-          searchTerms: terms,
-          maxResults: Number(config.maxResults) || 60,
-        }),
-      });
+    const country = config.country.trim() || DEFAULT_COUNTRY;
+    const state = config.state.trim();
+    const subAreas =
+      config.splitByArea ? resolveAreaSplits(country, state, config.city) : null;
 
-      const buildData = await readApiJson<BuildResponse & { error?: string }>(buildRes);
-      if (!buildRes.ok) {
-        setError(buildData.error || "Places search failed.");
-        setLog(buildData.log || []);
-        return;
+    const merged = new Map<string, NormalisedPlace>();
+    let rawTotal = 0;
+    const buildLog: string[] = [];
+
+    try {
+      if (subAreas && subAreas.length > 0) {
+        buildLog.push(
+          `Area split: ${subAreas.length} boroughs × ${terms.length} term(s) (up to ${PLACES_MAX_PER_TERM} each).`
+        );
+        setLog([...buildLog]);
+
+        for (let i = 0; i < subAreas.length; i++) {
+          const area = subAreas[i];
+          buildLog.push(`--- [${i + 1}/${subAreas.length}] ${area} ---`);
+          setLog([...buildLog]);
+
+          const data = await runPlacesBuild(area);
+          rawTotal += data.totalResults ?? 0;
+          mergePlaces(merged, data.results || []);
+          buildLog.push(...(data.log || []));
+          setLog([...buildLog]);
+          setResults(Array.from(merged.values()));
+          setTotalResults(rawTotal);
+          setDedupedCount(merged.size);
+        }
+      } else {
+        const data = await runPlacesBuild();
+        rawTotal = data.totalResults ?? 0;
+        mergePlaces(merged, data.results || []);
+        buildLog.push(...(data.log || []));
+        setLog(buildLog);
+        setResults(Array.from(merged.values()));
+        setTotalResults(rawTotal);
+        setDedupedCount(merged.size);
       }
 
-      setLog(buildData.log || []);
-      setResults(buildData.results || []);
-      setTotalResults(buildData.totalResults ?? 0);
-      setDedupedCount(buildData.dedupedCount ?? 0);
+      let places = Array.from(merged.values());
 
-      if (!config.scrapeEmails || (buildData.results?.length ?? 0) === 0) {
+      if (!config.scrapeEmails || places.length === 0) {
         setLog((prev) => [...prev, "Done."]);
         return;
       }
 
       setLog((prev) => [...prev, "Scraping emails from websites…"]);
 
-      const emailRes = await fetch("/api/emails", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ results: buildData.results }),
-      });
+      const byId = new Map(places.map((p) => [p.place_id, { ...p }]));
+      const emailLog: string[] = [];
+      let totalEmailsFound = 0;
 
-      const emailData = await readApiJson<EmailsResponse>(emailRes);
-      if (!emailRes.ok) {
-        setError(
-          emailData.error ||
-            "Places loaded but email scraping failed. You can still export without emails."
+      for (let i = 0; i < places.length; i += EMAIL_BATCH_SIZE) {
+        const batch = places.slice(i, i + EMAIL_BATCH_SIZE);
+        emailLog.push(
+          `Email batch ${Math.floor(i / EMAIL_BATCH_SIZE) + 1}/${Math.ceil(places.length / EMAIL_BATCH_SIZE)} (${batch.length} sites)…`
         );
-        setLog((prev) => [...prev, ...(emailData.log || []), "Email scrape failed."]);
-        return;
+        setLog((prev) => [...prev, ...emailLog.slice(-1)]);
+
+        const emailRes = await fetch("/api/emails", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ results: batch }),
+        });
+
+        const emailData = await readApiJson<EmailsResponse>(emailRes);
+        if (!emailRes.ok) {
+          throw new Error(
+            emailData.error ||
+              "Email scraping failed partway through. Partial results are shown."
+          );
+        }
+
+        for (const row of emailData.results || []) {
+          byId.set(row.place_id, row);
+        }
+        totalEmailsFound = Array.from(byId.values()).filter((r) =>
+          r.email?.trim()
+        ).length;
+        emailLog.push(...(emailData.log || []));
+        setLog((prev) => [...prev, ...(emailData.log || [])]);
+        setResults(Array.from(byId.values()));
+        setEmailsFound(totalEmailsFound);
       }
 
-      setLog((prev) => [...prev, ...(emailData.log || []), "Done."]);
-      setResults(emailData.results || buildData.results);
-      setEmailsFound(emailData.emailsFound ?? 0);
+      places = Array.from(byId.values());
+
+      if (config.onlyWithEmail) {
+        const before = places.length;
+        places = places.filter((r) => r.email?.trim());
+        setLog((prev) => [
+          ...prev,
+          `Filtered to ${places.length} leads with email (removed ${before - places.length} without).`,
+        ]);
+        setResults(places);
+        setDedupedCount(places.length);
+      }
+
+      setEmailsFound(places.filter((r) => r.email?.trim()).length);
+      setLog((prev) => [...prev, "Done."]);
     } catch (e) {
       setError(
         e instanceof Error
           ? e.message
-          : "Request failed. The server may have timed out on Vercel — try fewer results."
+          : "Request failed. Try fewer areas or disable email-only filter."
       );
     } finally {
       setRunning(false);
     }
-  }, [config]);
+  }, [config, runPlacesBuild]);
 
   const exportCsv = useCallback(() => {
     downloadCsv(
